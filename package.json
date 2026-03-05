@@ -1,0 +1,12 @@
+{
+  "name": "newsworthy",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "api",
+    "agent"
+  ],
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

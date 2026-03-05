@@ -1,0 +1,21 @@
+{
+  "chain": "World Chain",
+  "chainId": 480,
+  "rpc": "https://worldchain-mainnet.g.alchemy.com/public",
+  "deployer": "0x894907dc9e2c7F1949f43b79097Ad3E46713Ab00",
+  "deployedAt": "2026-03-04",
+  "note": "Test deployment — MockAgentBook (no World ID), 60s periods, 1 min vote quorum",
+  "contracts": {
+    "AgentBook": {
+      "address": "0x561DB06A58d793c86BC9b5CfecA9aBb1b42eE3F6",
+      "type": "MockAgentBook"
+    },
+    "FeedRegistry": {
+      "address": "0xb7fD8e36f47bA7965338c1D4a51233a6d9bd406E",
+      "bondAmount": "0.0001 ETH",
+      "challengePeriod": "60 seconds",
+      "votingPeriod": "60 seconds",
+      "minVotes": 1
+    }
+  }
+}

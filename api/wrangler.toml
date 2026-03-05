@@ -1,0 +1,15 @@
+name = "newsworthy-api"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "newsworthy-db"
+database_id = "placeholder-create-with-wrangler"
+
+[vars]
+AGENTBOOK_ADDRESS = ""
+FEED_REGISTRY_ADDRESS = ""
+WORLD_CHAIN_RPC = "https://worldchain-mainnet.g.alchemy.com/public"
+USDC_ADDRESS = ""
+PAYMENT_RECIPIENT = "0x9c87d52543a57b1a02eed0497d43bdb87d0b175c"

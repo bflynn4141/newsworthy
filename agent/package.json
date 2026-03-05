@@ -1,0 +1,12 @@
+{
+  "name": "newsworthy-agent",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "cli": "bun run src/cli.ts"
+  },
+  "dependencies": {
+    "viem": "^2.46.2"
+  }
+}

@@ -1,0 +1,13 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib", "dependencies"]
+evm_version = "paris"
+
+[dependencies]
+solady = { version = "0.0.210" }
+forge-std = { version = "1.8.2" }
+"@openzeppelin-contracts" = { version = "5.0.2" }
+
+[rpc_endpoints]
+worldchain = "https://worldchain-mainnet.g.alchemy.com/public"

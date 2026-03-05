@@ -1,0 +1,14 @@
+.secrets/
+node_modules/
+bun.lock
+
+# Foundry
+contracts/cache/
+contracts/out/
+contracts/artifacts/
+contracts/broadcast/
+contracts/dependencies/
+
+# TypeScript
+*.tsbuildinfo
+dist/
