@@ -1,7 +1,7 @@
 {
   "chain": "World Chain",
   "chainId": 480,
-  "rpc": "https://worldchain-mainnet.g.alchemy.com/public",
+  "rpc": "https://worldchain-mainnet.gateway.tenderly.co",
   "deployer": "0x894907dc9e2c7F1949f43b79097Ad3E46713Ab00",
   "deployedAt": "2026-03-04",
   "contracts": {

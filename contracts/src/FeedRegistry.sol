@@ -2,10 +2,13 @@
 pragma solidity ^0.8.19;
 
 import {IAgentBook} from "./interfaces/IAgentBook.sol";
+import {IERC20} from "./interfaces/IERC20.sol";
+import {INewsToken} from "./interfaces/INewsToken.sol";
 
 /// @title Feed Registry
 /// @notice A token-curated registry with AgentBook identity gate and voter rewards.
 /// @dev Items go through: submit → challenge window → accepted (or challenged → vote → resolve).
+///      Bonds are denominated in USDC (or any ERC-20). Users never need ETH (gas via World Chain grants).
 contract FeedRegistry {
     ///////////////////////////////////////////////////////////////////////////////
     ///                                  ERRORS                                ///
@@ -13,6 +16,7 @@ contract FeedRegistry {
 
     error NotRegistered();
     error DuplicateUrl();
+    error InvalidUrl();
     error InvalidItemStatus();
     error InsufficientBond();
     error SelfChallenge();
@@ -24,6 +28,8 @@ contract FeedRegistry {
     error QuorumNotMet();
     error QuorumMet();
     error NothingToWithdraw();
+    error TransferFailed();
+    error DailyLimitReached();
 
     ///////////////////////////////////////////////////////////////////////////////
     ///                                  EVENTS                                ///
@@ -35,6 +41,7 @@ contract FeedRegistry {
     event ItemResolved(uint256 indexed itemId, ItemStatus status);
     event ItemAccepted(uint256 indexed itemId);
     event Withdrawal(address indexed account, uint256 amount);
+    event NewsRewarded(uint256 indexed itemId, address indexed submitter, uint256 amount);
 
     ///////////////////////////////////////////////////////////////////////////////
     ///                                  TYPES                                 ///
@@ -66,10 +73,14 @@ contract FeedRegistry {
     //////////////////////////////////////////////////////////////////////////////
 
     IAgentBook public immutable agentBook;
+    IERC20 public immutable bondToken;      // USDC or other ERC-20
+    INewsToken public immutable newsToken;  // $NEWS reward token
     uint256 public bondAmount;
     uint256 public challengePeriod;
     uint256 public votingPeriod;
     uint256 public minVotes;
+    uint256 public newsPerItem;             // $NEWS minted per accepted item
+    uint256 public maxDailySubmissions;     // per human per day
     uint256 public constant VOTER_SHARE_BPS = 3000; // 30%
 
     uint256 public nextItemId;
@@ -78,6 +89,7 @@ contract FeedRegistry {
     mapping(uint256 => mapping(uint256 => bool)) public hasVotedByHuman;
     mapping(address => uint256) public pendingWithdrawals;
     mapping(bytes32 => bool) public urlSubmitted;
+    mapping(uint256 => mapping(uint256 => uint256)) public dailySubmissions; // humanId => day => count
 
     ///////////////////////////////////////////////////////////////////////////////
     ///                              CONSTRUCTOR                                ///
@@ -85,31 +97,49 @@ contract FeedRegistry {
 
     constructor(
         IAgentBook _agentBook,
+        IERC20 _bondToken,
+        INewsToken _newsToken,
         uint256 _bondAmount,
         uint256 _challengePeriod,
         uint256 _votingPeriod,
-        uint256 _minVotes
+        uint256 _minVotes,
+        uint256 _newsPerItem,
+        uint256 _maxDailySubmissions
     ) {
         agentBook = _agentBook;
+        bondToken = _bondToken;
+        newsToken = _newsToken;
         bondAmount = _bondAmount;
         challengePeriod = _challengePeriod;
         votingPeriod = _votingPeriod;
         minVotes = _minVotes;
+        newsPerItem = _newsPerItem;
+        maxDailySubmissions = _maxDailySubmissions;
     }
 
     ///////////////////////////////////////////////////////////////////////////////
     ///                              SUBMIT                                     ///
     //////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Submit an item to the registry.
+    /// @notice Submit an item to the registry. URL must be a tweet (x.com or twitter.com).
+    ///         Caller must have approved bondAmount of bondToken to this contract.
     /// @param url The URL of the content being submitted
     /// @param metadataHash An IPFS hash or other metadata reference
-    function submitItem(string calldata url, string calldata metadataHash) external payable {
-        if (agentBook.lookupHuman(msg.sender) == 0) revert NotRegistered();
+    function submitItem(string calldata url, string calldata metadataHash) external {
+        uint256 humanId = agentBook.lookupHuman(msg.sender);
+        if (humanId == 0) revert NotRegistered();
+        if (!_isTweetUrl(url)) revert InvalidUrl();
+
+        // Enforce daily submission limit per human
+        uint256 today = block.timestamp / 1 days;
+        if (dailySubmissions[humanId][today] >= maxDailySubmissions) revert DailyLimitReached();
+        dailySubmissions[humanId][today]++;
 
         bytes32 urlHash = keccak256(bytes(url));
         if (urlSubmitted[urlHash]) revert DuplicateUrl();
-        if (msg.value < bondAmount) revert InsufficientBond();
+
+        // Pull bond from sender
+        if (!bondToken.transferFrom(msg.sender, address(this), bondAmount)) revert TransferFailed();
 
         uint256 itemId = nextItemId++;
 
@@ -117,7 +147,7 @@ contract FeedRegistry {
             submitter: msg.sender,
             url: url,
             metadataHash: metadataHash,
-            bond: msg.value,
+            bond: bondAmount,
             submittedAt: block.timestamp,
             status: ItemStatus.Pending
         });
@@ -131,9 +161,10 @@ contract FeedRegistry {
     ///                              CHALLENGE                                  ///
     //////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Challenge a pending item. Requires a matching bond.
+    /// @notice Challenge a pending item. Requires a matching bond in bondToken.
+    ///         Caller must have approved the item's bond amount to this contract.
     /// @param itemId The ID of the item to challenge
-    function challengeItem(uint256 itemId) external payable {
+    function challengeItem(uint256 itemId) external {
         if (agentBook.lookupHuman(msg.sender) == 0) revert NotRegistered();
 
         Item storage item = items[itemId];
@@ -144,13 +175,14 @@ contract FeedRegistry {
         uint256 submitterHumanId = agentBook.lookupHuman(item.submitter);
         if (challengerHumanId == submitterHumanId) revert SelfChallenge();
 
-        if (msg.value < item.bond) revert InsufficientBond();
+        // Pull matching bond from challenger
+        if (!bondToken.transferFrom(msg.sender, address(this), item.bond)) revert TransferFailed();
 
         item.status = ItemStatus.Challenged;
 
         challenges[itemId] = Challenge({
             challenger: msg.sender,
-            bond: msg.value,
+            bond: item.bond,
             challengedAt: block.timestamp,
             votesFor: 0,
             votesAgainst: 0,
@@ -218,6 +250,7 @@ contract FeedRegistry {
             pendingWithdrawals[item.submitter] += winnerPayout;
             _distributeVoterRewards(challenge.keepVoters, voterPool);
             item.status = ItemStatus.Accepted;
+            _mintNewsReward(itemId, item.submitter);
         } else {
             // Remove wins — challenger gets 70%, removeVoters split 30%
             pendingWithdrawals[challenge.challenger] += winnerPayout;
@@ -246,6 +279,8 @@ contract FeedRegistry {
 
         item.status = ItemStatus.Accepted;
 
+        _mintNewsReward(itemId, item.submitter);
+
         emit ItemResolved(itemId, ItemStatus.Accepted);
     }
 
@@ -259,6 +294,8 @@ contract FeedRegistry {
         pendingWithdrawals[item.submitter] += item.bond;
         item.status = ItemStatus.Accepted;
 
+        _mintNewsReward(itemId, item.submitter);
+
         emit ItemAccepted(itemId);
     }
 
@@ -266,7 +303,7 @@ contract FeedRegistry {
     ///                              WITHDRAW                                   ///
     //////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Withdraw accumulated ETH rewards/bonds.
+    /// @notice Withdraw accumulated USDC rewards/bonds.
     function withdraw() external {
         uint256 amount = pendingWithdrawals[msg.sender];
         if (amount == 0) revert NothingToWithdraw();
@@ -274,8 +311,7 @@ contract FeedRegistry {
         // Checks-effects-interactions: zero out before transfer
         pendingWithdrawals[msg.sender] = 0;
 
-        (bool success,) = msg.sender.call{value: amount}("");
-        require(success, "Transfer failed");
+        if (!bondToken.transfer(msg.sender, amount)) revert TransferFailed();
 
         emit Withdrawal(msg.sender, amount);
     }
@@ -283,6 +319,13 @@ contract FeedRegistry {
     ///////////////////////////////////////////////////////////////////////////////
     ///                              INTERNAL                                   ///
     //////////////////////////////////////////////////////////////////////////////
+
+    /// @dev Mint $NEWS reward to a submitter when their item is accepted.
+    function _mintNewsReward(uint256 itemId, address submitter) internal {
+        if (newsPerItem == 0) return;
+        newsToken.mint(submitter, newsPerItem);
+        emit NewsRewarded(itemId, submitter, newsPerItem);
+    }
 
     /// @dev Distribute voter rewards evenly among winning voters.
     function _distributeVoterRewards(address[] storage voters, uint256 totalReward) internal {
@@ -293,6 +336,49 @@ contract FeedRegistry {
         for (uint256 i = 0; i < count; i++) {
             pendingWithdrawals[voters[i]] += perVoter;
         }
-        // Dust (totalReward % count) stays in contract — negligible for hackathon
+        // Dust (totalReward % count) stays in contract — negligible
+    }
+
+    /// @dev Check that a URL is a tweet: starts with "https://x.com/" or "https://twitter.com/"
+    ///      and contains "/status/" somewhere after the prefix.
+    function _isTweetUrl(string calldata url) internal pure returns (bool) {
+        bytes calldata b = bytes(url);
+
+        // Minimum valid tweet: "https://x.com/a/status/1" = 25 chars
+        if (b.length < 25) return false;
+
+        // Check prefix: "https://x.com/" (14 chars) or "https://twitter.com/" (20 chars)
+        bool isX = b.length >= 14
+            && b[0] == "h" && b[1] == "t" && b[2] == "t" && b[3] == "p" && b[4] == "s"
+            && b[5] == ":" && b[6] == "/" && b[7] == "/"
+            && b[8] == "x" && b[9] == "." && b[10] == "c" && b[11] == "o" && b[12] == "m"
+            && b[13] == "/";
+
+        bool isTwitter = !isX && b.length >= 20
+            && b[0] == "h" && b[1] == "t" && b[2] == "t" && b[3] == "p" && b[4] == "s"
+            && b[5] == ":" && b[6] == "/" && b[7] == "/"
+            && b[8] == "t" && b[9] == "w" && b[10] == "i" && b[11] == "t" && b[12] == "t"
+            && b[13] == "e" && b[14] == "r" && b[15] == "." && b[16] == "c" && b[17] == "o"
+            && b[18] == "m" && b[19] == "/";
+
+        if (!isX && !isTwitter) return false;
+
+        // Find "/status/" after the prefix
+        uint256 start = isX ? 14 : 20;
+        bytes memory needle = "/status/";
+        uint256 needleLen = 8;
+
+        for (uint256 i = start; i + needleLen <= b.length; i++) {
+            bool found = true;
+            for (uint256 j = 0; j < needleLen; j++) {
+                if (b[i + j] != needle[j]) {
+                    found = false;
+                    break;
+                }
+            }
+            if (found) return true;
+        }
+
+        return false;
     }
 }

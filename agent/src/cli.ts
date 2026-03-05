@@ -1,14 +1,16 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 // Newsworthy CLI — interact with FeedRegistry + AgentBook on World Chain
 //
 // Usage:
 //   bun run agent/src/cli.ts [--test] <command> [args...]
+//   node --import tsx agent/src/cli.ts [--test] <command> [args...]
 //
 // Commands (read):
 //   status          Registry overview: bond, periods, deployer balance
 //   items           List all items with ID, status, submitter, URL
 //   item <id>       Detail view for a single item + challenge info
 //   register        Check if deployer is registered in AgentBook
+//   dashboard       Live TUI dashboard (auto-refreshing, requires Node)
 //
 // Commands (write — costs gas):
 //   submit <url> [meta]     Submit news item with bond
@@ -22,17 +24,20 @@
 //   --test    Use test contracts (MockAgentBook, relaxed params)
 
 import { parseArgs } from 'node:util'
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import {
   createPublicClient,
   createWalletClient,
   http,
   formatEther,
+  formatUnits,
   type Address,
   type PublicClient,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { worldchain } from 'viem/chains'
-import { FEED_REGISTRY_ABI } from './curate.js'
+import { FEED_REGISTRY_ABI, ERC20_ABI } from './curate.js'
 import { AGENTBOOK_ABI } from './register.js'
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -40,6 +45,7 @@ import { AGENTBOOK_ABI } from './register.js'
 type Deployment = {
   chainId: number
   rpc: string
+  writeRpc?: string
   deployer: string
   contracts: {
     AgentBook: { address: string }
@@ -103,20 +109,19 @@ function die(msg: string): never {
 
 async function loadDeployment(test: boolean): Promise<Deployment> {
   const filename = test ? 'worldchain-test.json' : 'worldchain-mainnet.json'
-  const path = new URL(`../../contracts/deployments/${filename}`, import.meta.url)
+  const filePath = fileURLToPath(new URL(`../../contracts/deployments/${filename}`, import.meta.url))
   try {
-    const file = Bun.file(path)
-    return await file.json() as Deployment
+    const text = await readFile(filePath, 'utf-8')
+    return JSON.parse(text) as Deployment
   } catch {
     die(`Deployment file not found: contracts/deployments/${filename}`)
   }
 }
 
 async function loadPrivateKey(): Promise<`0x${string}`> {
-  const path = new URL('../../.secrets/deployer.key', import.meta.url)
+  const filePath = fileURLToPath(new URL('../../.secrets/deployer.key', import.meta.url))
   try {
-    const file = Bun.file(path)
-    const key = (await file.text()).trim()
+    const key = (await readFile(filePath, 'utf-8')).trim()
     if (!key.startsWith('0x')) return `0x${key}` as `0x${string}`
     return key as `0x${string}`
   } catch {
@@ -155,13 +160,32 @@ async function cmdStatus(
   console.log(`\n${BOLD}═══ Newsworthy Registry Status ═══${RESET}\n`)
   console.log(`  Registry:         ${DIM}${registryAddr}${RESET}`)
   console.log(`  AgentBook:        ${DIM}${agentBookAddr}${RESET}`)
-  console.log(`  Bond:             ${formatEther(bond as bigint)} ETH`)
+  // Fetch bond token info for display
+  const bondTokenAddr = await client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'bondToken' }) as Address
+  const [tokenSymbol, tokenDecimals] = await Promise.all([
+    client.readContract({ address: bondTokenAddr, abi: ERC20_ABI, functionName: 'symbol' }) as Promise<string>,
+    client.readContract({ address: bondTokenAddr, abi: ERC20_ABI, functionName: 'decimals' }) as Promise<number>,
+  ])
+  const newsTokenAddr = await client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'newsToken' }) as Address
+  const [newsPerItem, maxDaily] = await Promise.all([
+    client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'newsPerItem' }) as Promise<bigint>,
+    client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'maxDailySubmissions' }) as Promise<bigint>,
+  ])
+  const tokenBal = await client.readContract({ address: bondTokenAddr, abi: ERC20_ABI, functionName: 'balanceOf', args: [deployment.deployer as Address] }) as bigint
+  const newsBal = await client.readContract({ address: newsTokenAddr, abi: ERC20_ABI, functionName: 'balanceOf', args: [deployment.deployer as Address] }) as bigint
+
+  console.log(`  Bond:             ${formatUnits(bond as bigint, tokenDecimals)} ${tokenSymbol}`)
   console.log(`  Challenge period: ${formatDuration(Number(challengePeriod as bigint))}`)
   console.log(`  Voting period:    ${formatDuration(Number(votingPeriod as bigint))}`)
   console.log(`  Min votes:        ${(minVotes as bigint).toString()}`)
   console.log(`  Total items:      ${(nextId as bigint).toString()}`)
   console.log(`  Deployer:         ${DIM}${deployment.deployer}${RESET}`)
+  console.log(`  $NEWS / item:     ${formatUnits(newsPerItem, 18)} $NEWS`)
+  console.log(`  Daily limit:      ${maxDaily} submissions per human`)
   console.log(`  Deployer balance: ${formatEther(balance)} ETH`)
+  console.log(`  ${tokenSymbol} balance:   ${formatUnits(tokenBal, tokenDecimals)} ${tokenSymbol}`)
+  console.log(`  $NEWS balance:    ${formatUnits(newsBal, 18)} $NEWS`)
+  console.log(`  $NEWS token:      ${DIM}${newsTokenAddr}${RESET}`)
   console.log(`  Registered:       ${humanId !== 0n ? `\x1b[32mYes\x1b[0m (humanId: ${humanId})` : '\x1b[31mNo\x1b[0m'}`)
   console.log()
 }
@@ -184,7 +208,7 @@ async function cmdItems(client: PublicClient, registryAddr: Address) {
     }) as [Address, string, string, bigint, bigint, number]
 
     const [submitter, url, , bond, , status] = item
-    console.log(`  ${BOLD}#${i}${RESET}  ${statusLabel(status)}  ${formatEther(bond)} ETH  ${DIM}${submitter.slice(0, 10)}…${RESET}`)
+    console.log(`  ${BOLD}#${i}${RESET}  ${statusLabel(status)}  ${formatUnits(bond, 6)} USDC  ${DIM}${submitter.slice(0, 10)}…${RESET}`)
     console.log(`      ${url}`)
   }
   console.log()
@@ -207,7 +231,7 @@ async function cmdItem(client: PublicClient, registryAddr: Address, itemId: bigi
   console.log(`  URL:          ${url}`)
   console.log(`  Metadata:     ${metadataHash || DIM + '(none)' + RESET}`)
   console.log(`  Submitter:    ${DIM}${submitter}${RESET}`)
-  console.log(`  Bond:         ${formatEther(bond)} ETH`)
+  console.log(`  Bond:         ${formatUnits(bond, 6)} USDC`)
   console.log(`  Submitted at: ${new Date(Number(submittedAt) * 1000).toISOString()}`)
 
   if (status === 0) {
@@ -223,7 +247,7 @@ async function cmdItem(client: PublicClient, registryAddr: Address, itemId: bigi
 
     console.log(`\n  ${BOLD}── Challenge ──${RESET}`)
     console.log(`  Challenger:   ${DIM}${challenger}${RESET}`)
-    console.log(`  Bond:         ${formatEther(cBond)} ETH`)
+    console.log(`  Bond:         ${formatUnits(cBond, 6)} USDC`)
     console.log(`  Votes keep:   ${votesFor.toString()}`)
     console.log(`  Votes remove: ${votesAgainst.toString()}`)
     console.log(`  Voting:       ${timeRemaining(challengedAt, votingPeriod)}`)
@@ -252,16 +276,30 @@ async function cmdSubmit(
 ) {
   const walletClient = await getWalletClient(rpcUrl)
 
-  const bond = await client.readContract({
-    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'bondAmount',
+  const [bond, bondToken] = await Promise.all([
+    client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'bondAmount' }) as Promise<bigint>,
+    client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'bondToken' }) as Promise<Address>,
+  ])
+
+  // Ensure approval
+  const allowance = await client.readContract({
+    address: bondToken, abi: ERC20_ABI, functionName: 'allowance',
+    args: [walletClient.account!.address, registryAddr],
   }) as bigint
+  if (allowance < bond) {
+    console.log(`Approving bond token for registry...`)
+    await walletClient.writeContract({
+      address: bondToken, abi: ERC20_ABI, functionName: 'approve',
+      args: [registryAddr, 2n ** 256n - 1n],
+    })
+  }
 
   console.log(`\nSubmitting: ${url}`)
-  console.log(`Bond: ${formatEther(bond)} ETH`)
+  console.log(`Bond: ${formatUnits(bond, 6)} USDC`)
 
   const hash = await walletClient.writeContract({
     address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'submitItem',
-    args: [url, metadataHash], value: bond,
+    args: [url, metadataHash],
   })
 
   console.log(`\x1b[32m✓\x1b[0m Submitted: ${txLink(hash)}\n`)
@@ -277,13 +315,29 @@ async function cmdChallenge(
   }) as [Address, string, string, bigint, bigint, number]
 
   const bond = item[3]
+  const bondToken = await client.readContract({
+    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'bondToken',
+  }) as Address
+
+  // Ensure approval
+  const allowance = await client.readContract({
+    address: bondToken, abi: ERC20_ABI, functionName: 'allowance',
+    args: [walletClient.account!.address, registryAddr],
+  }) as bigint
+  if (allowance < bond) {
+    console.log(`Approving bond token for registry...`)
+    await walletClient.writeContract({
+      address: bondToken, abi: ERC20_ABI, functionName: 'approve',
+      args: [registryAddr, 2n ** 256n - 1n],
+    })
+  }
 
   console.log(`\nChallenging item #${itemId}`)
-  console.log(`Bond: ${formatEther(bond)} ETH`)
+  console.log(`Bond: ${formatUnits(bond, 6)} USDC`)
 
   const hash = await walletClient.writeContract({
     address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'challengeItem',
-    args: [itemId], value: bond,
+    args: [itemId],
   })
 
   console.log(`\x1b[32m✓\x1b[0m Challenged: ${txLink(hash)}\n`)
@@ -374,7 +428,7 @@ async function cmdWithdraw(
     return
   }
 
-  console.log(`\nWithdrawing ${formatEther(pending)} ETH`)
+  console.log(`\nWithdrawing ${formatUnits(pending, 6)} USDC`)
 
   const hash = await walletClient.writeContract({
     address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'withdraw',
@@ -387,11 +441,13 @@ async function cmdWithdraw(
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
+  const argv = typeof globalThis.Bun !== 'undefined' ? Bun.argv.slice(2) : process.argv.slice(2)
   const { values, positionals } = parseArgs({
-    args: Bun.argv.slice(2),
+    args: argv,
     options: {
       test: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
+      refresh: { type: 'string', default: '5' },
     },
     allowPositionals: true,
   })
@@ -400,13 +456,16 @@ async function main() {
     console.log(`
 ${BOLD}Newsworthy CLI${RESET} — FeedRegistry on World Chain
 
-${BOLD}Usage:${RESET} bun run agent/src/cli.ts [--test] <command> [args...]
+${BOLD}Usage:${RESET}
+  bun run agent/src/cli.ts [--test] <command>     (CLI commands)
+  bun run dashboard -- [--test]                    (interactive TUI)
 
 ${BOLD}Read commands:${RESET}
   status              Registry overview
   items               List all items
   item <id>           Detail view for one item
   register            Check AgentBook registration
+  dashboard           Live TUI dashboard (auto-refreshing)
 
 ${BOLD}Write commands:${RESET} (costs gas)
   submit <url> [meta] Submit item with bond
@@ -414,10 +473,11 @@ ${BOLD}Write commands:${RESET} (costs gas)
   vote <id> <keep|remove>  Vote on challenged item
   resolve <id>        Resolve a challenge
   accept <id>         Accept unchallenged item
-  withdraw            Claim pending ETH
+  withdraw            Claim pending USDC rewards
 
 ${BOLD}Flags:${RESET}
   --test              Use test contracts (MockAgentBook, 60s periods)
+  --refresh <sec>     Dashboard refresh interval (default: 5)
 `)
     return
   }
@@ -425,6 +485,7 @@ ${BOLD}Flags:${RESET}
   const isTest = values.test ?? false
   const deployment = await loadDeployment(isTest)
   const rpcUrl = deployment.rpc
+  const writeRpcUrl = deployment.writeRpc ?? rpcUrl
 
   const client = createPublicClient({
     chain: worldchain,
@@ -462,14 +523,14 @@ ${BOLD}Flags:${RESET}
         const url = positionals[1]
         if (!url) die('Usage: submit <url> [metadataHash]')
         const meta = positionals[2] ?? ''
-        await cmdSubmit(client, rpcUrl, registryAddr, url, meta)
+        await cmdSubmit(client, writeRpcUrl, registryAddr, url, meta)
         break
       }
 
       case 'challenge': {
         const id = positionals[1]
         if (id === undefined) die('Usage: challenge <id>')
-        await cmdChallenge(client, rpcUrl, registryAddr, BigInt(id))
+        await cmdChallenge(client, writeRpcUrl, registryAddr, BigInt(id))
         break
       }
 
@@ -478,33 +539,54 @@ ${BOLD}Flags:${RESET}
         const direction = positionals[2]
         if (id === undefined || !direction) die('Usage: vote <id> <keep|remove>')
         if (direction !== 'keep' && direction !== 'remove') die('Vote must be "keep" or "remove"')
-        await cmdVote(client, rpcUrl, registryAddr, BigInt(id), direction === 'keep')
+        await cmdVote(client, writeRpcUrl, registryAddr, BigInt(id), direction === 'keep')
         break
       }
 
       case 'resolve': {
         const id = positionals[1]
         if (id === undefined) die('Usage: resolve <id>')
-        await cmdResolve(client, rpcUrl, registryAddr, BigInt(id))
+        await cmdResolve(client, writeRpcUrl, registryAddr, BigInt(id))
         break
       }
 
       case 'accept': {
         const id = positionals[1]
         if (id === undefined) die('Usage: accept <id>')
-        await cmdAccept(client, rpcUrl, registryAddr, BigInt(id))
+        await cmdAccept(client, writeRpcUrl, registryAddr, BigInt(id))
         break
       }
 
       case 'withdraw':
-        await cmdWithdraw(client, rpcUrl, registryAddr, deployer)
+        await cmdWithdraw(client, writeRpcUrl, registryAddr, deployer)
         break
+
+      case 'dashboard': {
+        const { render } = await import('ink')
+        const { createElement } = await import('react')
+        const { Readable } = await import('node:stream')
+        const { default: App } = await import('./dashboard/App.js')
+        const refreshMs = Math.max(1, parseInt(values.refresh ?? '5', 10)) * 1000
+        const options: Record<string, unknown> = {}
+        if (!process.stdin.isTTY) {
+          // Non-interactive: provide a dummy stdin so Ink doesn't crash
+          options.stdin = new Readable({ read() {} }) as unknown as NodeJS.ReadStream
+        }
+        render(createElement(App, {
+          client,
+          registryAddr,
+          agentBookAddr,
+          deployer,
+          isTest,
+          refreshMs,
+        }), options)
+        return // ink takes over — don't exit
+      }
 
       default:
         die(`Unknown command: ${command}. Run with --help to see available commands.`)
     }
   } catch (err: any) {
-    // Viem nests custom error info in err.cause for ContractFunctionRevertedError
     const errorName = err?.cause?.data?.errorName
     if (errorName) {
       die(`Contract reverted: ${errorName}`)

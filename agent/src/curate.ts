@@ -31,6 +31,7 @@ export const FEED_REGISTRY_ABI = [
   { type: 'error', name: 'NotRegistered', inputs: [] },
   { type: 'error', name: 'DuplicateUrl', inputs: [] },
   { type: 'error', name: 'InvalidItemStatus', inputs: [] },
+  { type: 'error', name: 'InvalidUrl', inputs: [] },
   { type: 'error', name: 'InsufficientBond', inputs: [] },
   { type: 'error', name: 'SelfChallenge', inputs: [] },
   { type: 'error', name: 'AlreadyVoted', inputs: [] },
@@ -41,6 +42,8 @@ export const FEED_REGISTRY_ABI = [
   { type: 'error', name: 'QuorumNotMet', inputs: [] },
   { type: 'error', name: 'QuorumMet', inputs: [] },
   { type: 'error', name: 'NothingToWithdraw', inputs: [] },
+  { type: 'error', name: 'TransferFailed', inputs: [] },
+  { type: 'error', name: 'DailyLimitReached', inputs: [] },
 
   // ── Write functions ────────────────────────────────────────────────────────
   {
@@ -50,15 +53,15 @@ export const FEED_REGISTRY_ABI = [
       { name: 'url', type: 'string' },
       { name: 'metadataHash', type: 'string' },
     ],
-    outputs: [{ name: 'itemId', type: 'uint256' }],
-    stateMutability: 'payable',
+    outputs: [],
+    stateMutability: 'nonpayable',
   },
   {
     type: 'function',
     name: 'challengeItem',
     inputs: [{ name: 'itemId', type: 'uint256' }],
     outputs: [],
-    stateMutability: 'payable',
+    stateMutability: 'nonpayable',
   },
   {
     type: 'function',
@@ -109,6 +112,13 @@ export const FEED_REGISTRY_ABI = [
   },
   {
     type: 'function',
+    name: 'bondToken',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     name: 'items',
     inputs: [{ name: 'itemId', type: 'uint256' }],
     outputs: [
@@ -153,6 +163,37 @@ export const FEED_REGISTRY_ABI = [
     type: 'function',
     name: 'minVotes',
     inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'newsToken',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'newsPerItem',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'maxDailySubmissions',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'dailySubmissions',
+    inputs: [
+      { name: 'humanId', type: 'uint256' },
+      { name: 'day', type: 'uint256' },
+    ],
     outputs: [{ name: '', type: 'uint256' }],
     stateMutability: 'view',
   },
@@ -220,6 +261,61 @@ export const FEED_REGISTRY_ABI = [
       { name: 'amount', type: 'uint256', indexed: false },
     ],
   },
+  {
+    type: 'event',
+    name: 'NewsRewarded',
+    inputs: [
+      { name: 'itemId', type: 'uint256', indexed: true },
+      { name: 'submitter', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+    ],
+  },
+] as const
+
+// ── ERC-20 ABI (minimal for approve + allowance) ────────────────────────────
+
+export const ERC20_ABI = [
+  {
+    type: 'function',
+    name: 'approve',
+    inputs: [
+      { name: 'spender', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'allowance',
+    inputs: [
+      { name: 'owner', type: 'address' },
+      { name: 'spender', type: 'address' },
+    ],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'balanceOf',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'decimals',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint8' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'symbol',
+    inputs: [],
+    outputs: [{ name: '', type: 'string' }],
+    stateMutability: 'view',
+  },
 ] as const
 
 // ── Clients ──────────────────────────────────────────────────────────────────
@@ -235,7 +331,6 @@ export async function submitItem(
   registryAddress: Address,
   url: string,
   metadataHash: string,
-  bondAmount: bigint,
   account: Account,
 ): Promise<Hash> {
   const walletClient = createWalletClient({
@@ -249,7 +344,6 @@ export async function submitItem(
     abi: FEED_REGISTRY_ABI,
     functionName: 'submitItem',
     args: [url, metadataHash],
-    value: bondAmount,
   })
 }
 
@@ -258,7 +352,6 @@ export async function submitItem(
 export async function challengeItem(
   registryAddress: Address,
   itemId: bigint,
-  bondAmount: bigint,
   account: Account,
 ): Promise<Hash> {
   const walletClient = createWalletClient({
@@ -272,7 +365,6 @@ export async function challengeItem(
     abi: FEED_REGISTRY_ABI,
     functionName: 'challengeItem',
     args: [itemId],
-    value: bondAmount,
   })
 }
 
@@ -396,5 +488,13 @@ export async function getPendingWithdrawals(
     abi: FEED_REGISTRY_ABI,
     functionName: 'pendingWithdrawals',
     args: [account],
+  })
+}
+
+export async function getBondToken(registryAddress: Address): Promise<Address> {
+  return publicClient.readContract({
+    address: registryAddress,
+    abi: FEED_REGISTRY_ABI,
+    functionName: 'bondToken',
   })
 }

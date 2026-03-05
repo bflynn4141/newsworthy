@@ -4,9 +4,22 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "cli": "bun run src/cli.ts"
+    "cli": "bun run src/cli.ts",
+    "dashboard": "node --import tsx src/cli.ts dashboard",
+    "curate": "bun run src/curator.ts"
   },
   "dependencies": {
-    "viem": "^2.46.2"
+    "@x402/core": "^2.5.0",
+    "@x402/evm": "^2.5.0",
+    "axios": "^1.13.6",
+    "ink": "^6.8.0",
+    "react": "^19.2.4",
+    "viem": "^2.46.2",
+    "x402": "^1.1.0",
+    "x402-axios": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "tsx": "^4.21.0"
   }
 }

@@ -3,12 +3,18 @@ pragma solidity ^0.8.19;
 
 import "forge-std/Test.sol";
 import {FeedRegistry} from "../src/FeedRegistry.sol";
+import {NewsToken} from "../src/NewsToken.sol";
 import {MockAgentBook} from "./mock/MockAgentBook.sol";
+import {MockUSDC} from "./mock/MockUSDC.sol";
 import {IAgentBook} from "../src/interfaces/IAgentBook.sol";
+import {IERC20} from "../src/interfaces/IERC20.sol";
+import {INewsToken} from "../src/interfaces/INewsToken.sol";
 
 contract FeedRegistryTest is Test {
     FeedRegistry public registry;
     MockAgentBook public agentBook;
+    MockUSDC public usdc;
+    NewsToken public news;
 
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
@@ -16,47 +22,61 @@ contract FeedRegistryTest is Test {
     address dave = makeAddr("dave");
     address unregistered = makeAddr("unregistered");
 
-    uint256 constant BOND = 0.001 ether;
+    uint256 constant BOND = 1e6; // 1 USDC (6 decimals)
     uint256 constant CHALLENGE_PERIOD = 1 hours;
     uint256 constant VOTING_PERIOD = 1 hours;
     uint256 constant MIN_VOTES = 3;
+    uint256 constant NEWS_PER_ITEM = 100e18; // 100 $NEWS per accepted item
+    uint256 constant MAX_DAILY = 3;
 
     function setUp() public {
         agentBook = new MockAgentBook();
+        usdc = new MockUSDC();
+
+        // Deploy NewsToken with this test contract as temporary minter
+        news = new NewsToken(address(this));
+
         registry = new FeedRegistry(
             IAgentBook(address(agentBook)),
+            IERC20(address(usdc)),
+            INewsToken(address(news)),
             BOND,
             CHALLENGE_PERIOD,
             VOTING_PERIOD,
-            MIN_VOTES
+            MIN_VOTES,
+            NEWS_PER_ITEM,
+            MAX_DAILY
         );
+
+        // Transfer minter role to registry
+        news.setMinter(address(registry));
 
         // Register agents with distinct humanIds
         agentBook.setHumanId(alice, 1);
         agentBook.setHumanId(bob, 2);
         agentBook.setHumanId(carol, 3);
         agentBook.setHumanId(dave, 4);
-        // `unregistered` has humanId 0 (default)
 
-        // Fund test accounts
-        vm.deal(alice, 10 ether);
-        vm.deal(bob, 10 ether);
-        vm.deal(carol, 10 ether);
-        vm.deal(dave, 10 ether);
-        vm.deal(unregistered, 10 ether);
+        // Mint USDC and approve registry for all test accounts
+        address[4] memory users = [alice, bob, carol, dave];
+        for (uint256 i = 0; i < users.length; i++) {
+            usdc.mint(users[i], 100e6); // 100 USDC each
+            vm.prank(users[i]);
+            usdc.approve(address(registry), type(uint256).max);
+        }
     }
 
     // ─── Helpers ──────────────────────────────────────────
 
     function _submitItem(address submitter, string memory url) internal returns (uint256) {
         vm.prank(submitter);
-        registry.submitItem{value: BOND}(url, "QmTest");
+        registry.submitItem(url, "QmTest");
         return registry.nextItemId() - 1;
     }
 
     function _challengeItem(address challenger, uint256 itemId) internal {
         vm.prank(challenger);
-        registry.challengeItem{value: BOND}(itemId);
+        registry.challengeItem(itemId);
     }
 
     function _vote(address voter, uint256 itemId, bool support) internal {
@@ -67,10 +87,12 @@ contract FeedRegistryTest is Test {
     // ─── 1. Submit: registered ────────────────────────────
 
     function test_submitItem_registered() public {
+        uint256 balBefore = usdc.balanceOf(alice);
+
         vm.prank(alice);
         vm.expectEmit(true, true, false, true);
-        emit FeedRegistry.ItemSubmitted(0, alice, "https://example.com/1");
-        registry.submitItem{value: BOND}("https://example.com/1", "QmHash1");
+        emit FeedRegistry.ItemSubmitted(0, alice, "https://x.com/alice/status/1000000000000000001");
+        registry.submitItem("https://x.com/alice/status/1000000000000000001", "QmHash1");
 
         (address submitter,,,, uint256 submittedAt, FeedRegistry.ItemStatus status) =
             registry.items(0);
@@ -79,6 +101,10 @@ contract FeedRegistryTest is Test {
         assertEq(submittedAt, block.timestamp);
         assertEq(uint8(status), uint8(FeedRegistry.ItemStatus.Pending));
         assertEq(registry.nextItemId(), 1);
+        // Bond pulled from alice
+        assertEq(usdc.balanceOf(alice), balBefore - BOND);
+        // Bond held by registry
+        assertEq(usdc.balanceOf(address(registry)), BOND);
     }
 
     // ─── 2. Submit: unregistered ──────────────────────────
@@ -86,52 +112,115 @@ contract FeedRegistryTest is Test {
     function test_submitItem_unregistered() public {
         vm.prank(unregistered);
         vm.expectRevert(FeedRegistry.NotRegistered.selector);
-        registry.submitItem{value: BOND}("https://example.com/2", "QmHash2");
+        registry.submitItem("https://x.com/user/status/1000000000000000002", "QmHash2");
     }
 
     // ─── 3. Submit: duplicate URL ─────────────────────────
 
     function test_submitItem_duplicateUrl() public {
-        _submitItem(alice, "https://example.com/dup");
+        _submitItem(alice, "https://x.com/user/status/1000000000000000003");
 
         vm.prank(bob);
         vm.expectRevert(FeedRegistry.DuplicateUrl.selector);
-        registry.submitItem{value: BOND}("https://example.com/dup", "QmHash");
+        registry.submitItem("https://x.com/user/status/1000000000000000003", "QmHash");
+    }
+
+    // ─── 3b. Submit: invalid URL ────────────────────────────
+
+    function test_submitItem_invalidUrl() public {
+        vm.prank(alice);
+        vm.expectRevert(FeedRegistry.InvalidUrl.selector);
+        registry.submitItem("https://example.com/not-a-tweet", "QmHash");
+    }
+
+    function test_submitItem_invalidUrl_noStatus() public {
+        vm.prank(alice);
+        vm.expectRevert(FeedRegistry.InvalidUrl.selector);
+        registry.submitItem("https://x.com/user/profile", "QmHash");
+    }
+
+    function test_submitItem_twitterDotCom() public {
+        _submitItem(alice, "https://twitter.com/user/status/1000000000000000099");
+        assertEq(registry.nextItemId(), 1);
+    }
+
+    // ─── 3c. Submit: daily limit ────────────────────────────
+
+    function test_submitItem_dailyLimit() public {
+        _submitItem(alice, "https://x.com/user/status/1000000000000000030");
+        _submitItem(alice, "https://x.com/user/status/1000000000000000031");
+        _submitItem(alice, "https://x.com/user/status/1000000000000000032");
+
+        // 4th submission should fail
+        vm.prank(alice);
+        vm.expectRevert(FeedRegistry.DailyLimitReached.selector);
+        registry.submitItem("https://x.com/user/status/1000000000000000033", "QmHash");
+    }
+
+    function test_submitItem_dailyLimit_resetsNextDay() public {
+        _submitItem(alice, "https://x.com/user/status/1000000000000000040");
+        _submitItem(alice, "https://x.com/user/status/1000000000000000041");
+        _submitItem(alice, "https://x.com/user/status/1000000000000000042");
+
+        // Warp to next day
+        vm.warp(block.timestamp + 1 days);
+
+        // Should succeed — new day
+        _submitItem(alice, "https://x.com/user/status/1000000000000000043");
+        assertEq(registry.nextItemId(), 4);
+    }
+
+    function test_submitItem_dailyLimit_perHuman() public {
+        // Alice uses up her limit
+        _submitItem(alice, "https://x.com/user/status/1000000000000000050");
+        _submitItem(alice, "https://x.com/user/status/1000000000000000051");
+        _submitItem(alice, "https://x.com/user/status/1000000000000000052");
+
+        // Bob should still be able to submit
+        _submitItem(bob, "https://x.com/user/status/1000000000000000053");
+        assertEq(registry.nextItemId(), 4);
     }
 
     // ─── 4. Challenge: success ────────────────────────────
 
     function test_challengeItem() public {
-        uint256 itemId = _submitItem(alice, "https://example.com/c1");
+        uint256 itemId = _submitItem(alice, "https://x.com/user/status/1000000000000000004");
+
+        uint256 bobBefore = usdc.balanceOf(bob);
 
         vm.prank(bob);
         vm.expectEmit(true, true, false, true);
         emit FeedRegistry.ItemChallenged(itemId, bob);
-        registry.challengeItem{value: BOND}(itemId);
+        registry.challengeItem(itemId);
 
         (,,,,, FeedRegistry.ItemStatus status) = registry.items(itemId);
         assertEq(uint8(status), uint8(FeedRegistry.ItemStatus.Challenged));
+        // Bob's bond pulled
+        assertEq(usdc.balanceOf(bob), bobBefore - BOND);
+        // Registry holds both bonds
+        assertEq(usdc.balanceOf(address(registry)), 2 * BOND);
     }
 
     // ─── 5. Challenge: self-challenge ─────────────────────
 
     function test_challengeItem_selfChallenge() public {
-        uint256 itemId = _submitItem(alice, "https://example.com/self");
+        uint256 itemId = _submitItem(alice, "https://x.com/user/status/1000000000000000005");
 
-        // Create a second wallet for alice's human (same humanId=1)
         address aliceAlt = makeAddr("aliceAlt");
         agentBook.setHumanId(aliceAlt, 1);
-        vm.deal(aliceAlt, 10 ether);
+        usdc.mint(aliceAlt, 100e6);
+        vm.prank(aliceAlt);
+        usdc.approve(address(registry), type(uint256).max);
 
         vm.prank(aliceAlt);
         vm.expectRevert(FeedRegistry.SelfChallenge.selector);
-        registry.challengeItem{value: BOND}(itemId);
+        registry.challengeItem(itemId);
     }
 
     // ─── 6. Vote: success ─────────────────────────────────
 
     function test_voteOnChallenge() public {
-        uint256 itemId = _submitItem(alice, "https://example.com/v1");
+        uint256 itemId = _submitItem(alice, "https://x.com/user/status/1000000000000000006");
         _challengeItem(bob, itemId);
 
         vm.prank(carol);
@@ -146,13 +235,11 @@ contract FeedRegistryTest is Test {
     // ─── 7. Vote: double vote (same human, different wallets) ──
 
     function test_voteOnChallenge_doubleVote() public {
-        uint256 itemId = _submitItem(alice, "https://example.com/dv");
+        uint256 itemId = _submitItem(alice, "https://x.com/user/status/1000000000000000007");
         _challengeItem(bob, itemId);
 
-        // Carol votes
         _vote(carol, itemId, true);
 
-        // Carol's second wallet (same humanId=3)
         address carolAlt = makeAddr("carolAlt");
         agentBook.setHumanId(carolAlt, 3);
 
@@ -164,15 +251,13 @@ contract FeedRegistryTest is Test {
     // ─── 8. Resolve: keep wins ────────────────────────────
 
     function test_resolveChallenge_keepWins() public {
-        uint256 itemId = _submitItem(alice, "https://example.com/keep");
+        uint256 itemId = _submitItem(alice, "https://x.com/user/status/1000000000000000008");
         _challengeItem(bob, itemId);
 
-        // 3 votes: carol=keep, dave=keep, alice=keep (submitter can vote too)
         _vote(carol, itemId, true);
         _vote(dave, itemId, true);
         _vote(alice, itemId, true);
 
-        // Warp past voting period
         vm.warp(block.timestamp + VOTING_PERIOD + 1);
 
         registry.resolveChallenge(itemId);
@@ -180,10 +265,6 @@ contract FeedRegistryTest is Test {
         (,,,,, FeedRegistry.ItemStatus status) = registry.items(itemId);
         assertEq(uint8(status), uint8(FeedRegistry.ItemStatus.Accepted));
 
-        // Total pool = 2 * BOND = 0.002 ether
-        // Submitter (alice) gets 70% = 0.0014 ether base
-        // Alice also voted, so she's in keepVoters: voterPool = 0.0006 ether / 3 voters = 0.0002 each
-        // Alice total pending = 0.0014 + 0.0002 = 0.0016
         uint256 totalPool = 2 * BOND;
         uint256 voterPool = (totalPool * 3000) / 10_000;
         uint256 winnerPayout = totalPool - voterPool;
@@ -192,16 +273,18 @@ contract FeedRegistryTest is Test {
         assertEq(registry.pendingWithdrawals(alice), winnerPayout + perVoter);
         assertEq(registry.pendingWithdrawals(carol), perVoter);
         assertEq(registry.pendingWithdrawals(dave), perVoter);
-        assertEq(registry.pendingWithdrawals(bob), 0); // challenger loses
+        assertEq(registry.pendingWithdrawals(bob), 0);
+
+        // Submitter earned $NEWS
+        assertEq(news.balanceOf(alice), NEWS_PER_ITEM);
     }
 
     // ─── 9. Resolve: remove wins ──────────────────────────
 
     function test_resolveChallenge_removeWins() public {
-        uint256 itemId = _submitItem(alice, "https://example.com/remove");
+        uint256 itemId = _submitItem(alice, "https://x.com/user/status/1000000000000000009");
         _challengeItem(bob, itemId);
 
-        // 3 votes: carol=remove, dave=remove, bob=remove (challenger can vote too)
         _vote(carol, itemId, false);
         _vote(dave, itemId, false);
         _vote(bob, itemId, false);
@@ -221,16 +304,18 @@ contract FeedRegistryTest is Test {
         assertEq(registry.pendingWithdrawals(bob), winnerPayout + perVoter);
         assertEq(registry.pendingWithdrawals(carol), perVoter);
         assertEq(registry.pendingWithdrawals(dave), perVoter);
-        assertEq(registry.pendingWithdrawals(alice), 0); // submitter loses
+        assertEq(registry.pendingWithdrawals(alice), 0);
+
+        // Rejected — no $NEWS minted
+        assertEq(news.balanceOf(alice), 0);
     }
 
     // ─── 10. Resolve: no quorum ───────────────────────────
 
     function test_resolveNoQuorum() public {
-        uint256 itemId = _submitItem(alice, "https://example.com/nq");
+        uint256 itemId = _submitItem(alice, "https://x.com/user/status/1000000000000000010");
         _challengeItem(bob, itemId);
 
-        // Only 2 votes (below minVotes=3)
         _vote(carol, itemId, true);
         _vote(dave, itemId, false);
 
@@ -241,17 +326,18 @@ contract FeedRegistryTest is Test {
         (,,,,, FeedRegistry.ItemStatus status) = registry.items(itemId);
         assertEq(uint8(status), uint8(FeedRegistry.ItemStatus.Accepted));
 
-        // Both bonds returned
         assertEq(registry.pendingWithdrawals(alice), BOND);
         assertEq(registry.pendingWithdrawals(bob), BOND);
+
+        // Accepted via no-quorum — submitter still earns $NEWS
+        assertEq(news.balanceOf(alice), NEWS_PER_ITEM);
     }
 
     // ─── 11. Accept: unchallenged item ────────────────────
 
     function test_acceptItem() public {
-        uint256 itemId = _submitItem(alice, "https://example.com/accept");
+        uint256 itemId = _submitItem(alice, "https://x.com/user/status/1000000000000000011");
 
-        // Warp past challenge period
         vm.warp(block.timestamp + CHALLENGE_PERIOD + 1);
 
         vm.expectEmit(true, false, false, true);
@@ -261,39 +347,54 @@ contract FeedRegistryTest is Test {
         (,,,,, FeedRegistry.ItemStatus status) = registry.items(itemId);
         assertEq(uint8(status), uint8(FeedRegistry.ItemStatus.Accepted));
 
-        // Bond returned to submitter
         assertEq(registry.pendingWithdrawals(alice), BOND);
+
+        // Submitter earned $NEWS
+        assertEq(news.balanceOf(alice), NEWS_PER_ITEM);
     }
 
-    // ─── 12. Withdraw: claim rewards ──────────────────────
+    // ─── 12. Withdraw: claim USDC rewards ─────────────────
 
     function test_withdraw() public {
-        uint256 itemId = _submitItem(alice, "https://example.com/wd");
+        uint256 itemId = _submitItem(alice, "https://x.com/user/status/1000000000000000012");
 
         vm.warp(block.timestamp + CHALLENGE_PERIOD + 1);
         registry.acceptItem(itemId);
 
-        uint256 balanceBefore = alice.balance;
+        uint256 balanceBefore = usdc.balanceOf(alice);
 
         vm.prank(alice);
         vm.expectEmit(true, false, false, true);
         emit FeedRegistry.Withdrawal(alice, BOND);
         registry.withdraw();
 
-        assertEq(alice.balance, balanceBefore + BOND);
+        assertEq(usdc.balanceOf(alice), balanceBefore + BOND);
         assertEq(registry.pendingWithdrawals(alice), 0);
     }
 
     // ─── 13. Challenge: period expired ────────────────────
 
     function test_challengePeriod_expired() public {
-        uint256 itemId = _submitItem(alice, "https://example.com/exp");
+        uint256 itemId = _submitItem(alice, "https://x.com/user/status/1000000000000000013");
 
-        // Warp past challenge period
         vm.warp(block.timestamp + CHALLENGE_PERIOD + 1);
 
         vm.prank(bob);
         vm.expectRevert(FeedRegistry.ChallengePeriodExpired.selector);
-        registry.challengeItem{value: BOND}(itemId);
+        registry.challengeItem(itemId);
+    }
+
+    // ─── 14. $NEWS: multiple acceptances accumulate ───────
+
+    function test_newsAccumulates() public {
+        uint256 id1 = _submitItem(alice, "https://x.com/user/status/1000000000000000014");
+        uint256 id2 = _submitItem(alice, "https://x.com/user/status/1000000000000000015");
+
+        vm.warp(block.timestamp + CHALLENGE_PERIOD + 1);
+
+        registry.acceptItem(id1);
+        registry.acceptItem(id2);
+
+        assertEq(news.balanceOf(alice), NEWS_PER_ITEM * 2);
     }
 }

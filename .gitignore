@@ -12,3 +12,4 @@ contracts/dependencies/
 # TypeScript
 *.tsbuildinfo
 dist/
+agent/.cache/

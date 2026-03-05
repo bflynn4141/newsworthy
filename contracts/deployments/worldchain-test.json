@@ -1,21 +1,36 @@
 {
   "chain": "World Chain",
   "chainId": 480,
-  "rpc": "https://worldchain-mainnet.g.alchemy.com/public",
-  "deployer": "0x894907dc9e2c7F1949f43b79097Ad3E46713Ab00",
-  "deployedAt": "2026-03-04",
-  "note": "Test deployment — MockAgentBook (no World ID), 60s periods, 1 min vote quorum",
+  "rpc": "https://worldchain-mainnet.gateway.tenderly.co",
+  "writeRpc": "https://480.rpc.thirdweb.com",
+  "deployer": "0xA145882271662D59362924B3fD2Ed22Df5B9331c",
+  "deployedAt": "2026-03-05",
+  "note": "Test deployment v4 — USDC bonds, $NEWS token + staking, tweet-only URLs, daily limit, MockAgentBook, 30m periods, 1 min quorum",
   "contracts": {
     "AgentBook": {
-      "address": "0x561DB06A58d793c86BC9b5CfecA9aBb1b42eE3F6",
+      "address": "0x04436Df79E8A4604AF12abe21f275143e6bF47f2",
       "type": "MockAgentBook"
     },
     "FeedRegistry": {
-      "address": "0xb7fD8e36f47bA7965338c1D4a51233a6d9bd406E",
-      "bondAmount": "0.0001 ETH",
-      "challengePeriod": "60 seconds",
-      "votingPeriod": "60 seconds",
-      "minVotes": 1
+      "address": "0x0156424Ae6112135c5371ddfba1668a706A6a57B",
+      "bondToken": "0x79A02482A880bCE3F13e09Da970dC34db4CD24d1",
+      "bondAmount": "0.1 USDC",
+      "challengePeriod": "30 minutes",
+      "votingPeriod": "30 minutes",
+      "minVotes": 1,
+      "newsPerItem": "100 $NEWS",
+      "maxDailySubmissions": 3
+    },
+    "NewsToken": {
+      "address": "0x11D1E765302a53e44b172931f963e64BDc6b301D",
+      "symbol": "NEWS",
+      "decimals": 18,
+      "minter": "0x0156424Ae6112135c5371ddfba1668a706A6a57B"
+    },
+    "NewsStaking": {
+      "address": "0x42329d3BA44455D3087Da6C912da5123282E343b",
+      "stakedToken": "0x11D1E765302a53e44b172931f963e64BDc6b301D",
+      "rewardToken": "0x79A02482A880bCE3F13e09Da970dC34db4CD24d1"
     }
   }
 }
