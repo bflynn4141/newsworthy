@@ -15,6 +15,7 @@ export type NavigationState = {
 export type ViewState = {
   showFlagged: boolean
   sortMode: SortMode
+  showLeaderboard: boolean
 }
 
 // This hook MUST only be called when raw mode is supported.
@@ -58,6 +59,10 @@ export function useNavigation(
 
     if (input === 'f' || input === 'F') {
       onViewChange(v => ({ ...v, showFlagged: !v.showFlagged }))
+      return
+    }
+    if (input === 'l' || input === 'L') {
+      onViewChange(v => ({ ...v, showLeaderboard: !v.showLeaderboard }))
       return
     }
     if (input === 's' || input === 'S') {

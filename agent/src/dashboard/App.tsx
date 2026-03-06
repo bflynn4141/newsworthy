@@ -9,6 +9,7 @@ import Header from './Header.js'
 import StatusColumn from './StatusColumn.js'
 import Footer from './Footer.js'
 import DetailPanel from './DetailPanel.js'
+import LeaderboardPanel from './LeaderboardPanel.js'
 
 const COLUMNS: ItemStatus[] = ['pending', 'challenged', 'accepted', 'rejected']
 
@@ -36,14 +37,16 @@ function computeVisibleItems(
 }
 
 // Interactive layer — only mounted when raw mode is supported
-function InteractiveDashboard({ data, isTest, refreshMs, cols }: {
+function InteractiveDashboard({ data, isTest, refreshMs, cols, client, registryAddr }: {
   data: ReturnType<typeof useFeedData>
   isTest: boolean
   refreshMs: number
   cols: number
+  client: PublicClient
+  registryAddr: Address
 }) {
   // View state lives here so visible items are computed BEFORE navigation
-  const [viewState, setViewState] = React.useState<ViewState>({ showFlagged: false, sortMode: 'newest' as SortMode })
+  const [viewState, setViewState] = React.useState<ViewState>({ showFlagged: false, sortMode: 'newest' as SortMode, showLeaderboard: false })
 
   // Compute visible items from filter + sort
   const visibleItems = computeVisibleItems(data.items, viewState.showFlagged, viewState.sortMode)
@@ -66,14 +69,17 @@ function InteractiveDashboard({ data, isTest, refreshMs, cols }: {
       selectedItem={nav.selectedItem}
       detailItem={nav.detailItem}
       showFlagged={viewState.showFlagged}
+      showLeaderboard={viewState.showLeaderboard}
       sortMode={viewState.sortMode}
       interactive={true}
+      client={client}
+      registryAddr={registryAddr}
     />
   )
 }
 
 // Shared layout used by both interactive and read-only modes
-function DashboardLayout({ data, visibleItems, isTest, refreshMs, cols, stacked, selectedCol, selectedRow, selectedItem, detailItem, showFlagged, sortMode, interactive }: {
+function DashboardLayout({ data, visibleItems, isTest, refreshMs, cols, stacked, selectedCol, selectedRow, selectedItem, detailItem, showFlagged, showLeaderboard, sortMode, interactive, client, registryAddr }: {
   data: ReturnType<typeof useFeedData>
   visibleItems: Record<ItemStatus, FeedItem[]>
   isTest: boolean
@@ -85,8 +91,11 @@ function DashboardLayout({ data, visibleItems, isTest, refreshMs, cols, stacked,
   selectedItem: FeedItem | null
   detailItem?: FeedItem | null
   showFlagged?: boolean
+  showLeaderboard?: boolean
   sortMode?: SortMode
   interactive: boolean
+  client?: PublicClient
+  registryAddr?: Address
 }) {
   const minVotes = data.config ? Number(data.config.minVotes) : 1
 
@@ -135,6 +144,14 @@ function DashboardLayout({ data, visibleItems, isTest, refreshMs, cols, stacked,
           <DetailPanel item={detailItem} cols={cols} config={data.config} />
         </>
       )}
+      {showLeaderboard && client && registryAddr && (
+        <>
+          <Box marginY={0}>
+            <Text dimColor>{'─'.repeat(Math.max(1, cols - 4))}</Text>
+          </Box>
+          <LeaderboardPanel client={client} registryAddr={registryAddr} />
+        </>
+      )}
       <Box marginY={0}>
         <Text dimColor>{'─'.repeat(Math.max(1, cols - 4))}</Text>
       </Box>
@@ -178,6 +195,8 @@ export default function App({ client, registryAddr, agentBookAddr, deployer, isT
         isTest={isTest}
         refreshMs={refreshMs}
         cols={cols}
+        client={client}
+        registryAddr={registryAddr}
       />
     )
   }

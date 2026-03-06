@@ -32,6 +32,7 @@ export default function Footer({ lastRefresh, error, selectedItem, interactive, 
         {interactive ? (
           <Text dimColor>
             {'\u2190\u2192\u2191\u2193'} nav  Enter: detail  S: sort ({SORT_LABELS[sortMode ?? 'newest']})
+            {'  L: leaderboard'}
             {flaggedCount ? `  F: ${showFlagged ? 'hide' : 'show'} flagged (${flaggedCount})` : ''}
             {'  '}Q: quit
           </Text>
