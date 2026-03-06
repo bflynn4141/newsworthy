@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { feed } from './routes/feed'
 import { stats } from './routes/stats'
-import { x402AgentkitMiddleware } from './middleware/x402-agentkit'
+import { createPaymentMiddleware } from './middleware/x402-agentkit'
 import { syncEvents } from './indexer/sync'
 import type { Env } from './types'
 
@@ -17,14 +17,19 @@ app.get('/health', (c) => c.json({ ok: true, service: 'newsworthy-api' }))
 // Public endpoints — no payment needed
 app.route('/stats', stats)
 
-// x402 + AgentKit gated endpoints
+// x402 gated endpoints
 const gated = new Hono<{ Bindings: Env }>()
-gated.use('*', x402AgentkitMiddleware())
+
+// Apply x402 payment middleware (lazy init per request since env isn't available at module level)
+gated.use('*', async (c, next) => {
+  const middleware = createPaymentMiddleware(c.env)
+  return middleware(c, next)
+})
 
 // Mount feed routes under the gate
 gated.route('/feed', feed)
 
-// Pending items — also gated (transparency into the challenge process)
+// Pending items — also gated
 gated.get('/pending', async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT * FROM articles WHERE status IN ('pending', 'challenged')
@@ -39,10 +44,13 @@ gated.get('/pending', async (c) => {
 
 app.route('/', gated)
 
-// Internal: trigger event sync (would be called by a cron or webhook)
-app.post('/index', async (c) => {
-  // Simple auth: require a secret header to prevent public triggering
-  // For hackathon, we skip auth on this endpoint
+// Internal: trigger event sync
+app.post('/sync', async (c) => {
+  const secret = c.req.header('x-sync-secret')
+  if (secret !== c.env.SYNC_SECRET) {
+    return c.json({ error: 'Unauthorized' }, 401)
+  }
+
   const fromBlock = BigInt(c.req.query('from') ?? '0')
 
   const result = await syncEvents(

@@ -2,9 +2,11 @@ export type Env = {
   DB: D1Database
   AGENTBOOK_ADDRESS: string
   FEED_REGISTRY_ADDRESS: string
+  NEWS_STAKING_ADDRESS: string
   WORLD_CHAIN_RPC: string
   USDC_ADDRESS: string
   PAYMENT_RECIPIENT: string
+  SYNC_SECRET?: string
 }
 
 export interface Article {

@@ -8,6 +8,9 @@
     "db:migrate": "wrangler d1 execute newsworthy-db --local --file=./schema.sql"
   },
   "dependencies": {
+    "@x402/core": "^2.5.0",
+    "@x402/evm": "^2.5.0",
+    "@x402/hono": "^2.5.0",
     "hono": "^4.7.0",
     "viem": "^2.46.2"
   },

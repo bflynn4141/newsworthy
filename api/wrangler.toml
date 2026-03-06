@@ -5,11 +5,12 @@ compatibility_date = "2025-03-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "newsworthy-db"
-database_id = "placeholder-create-with-wrangler"
+database_id = "d92c3799-7ec2-4712-b74d-3054760b2e4f"
 
 [vars]
-AGENTBOOK_ADDRESS = ""
-FEED_REGISTRY_ADDRESS = ""
-WORLD_CHAIN_RPC = "https://worldchain-mainnet.g.alchemy.com/public"
-USDC_ADDRESS = ""
-PAYMENT_RECIPIENT = "0x9c87d52543a57b1a02eed0497d43bdb87d0b175c"
+AGENTBOOK_ADDRESS = "0x04436Df79E8A4604AF12abe21f275143e6bF47f2"
+FEED_REGISTRY_ADDRESS = "0x0156424Ae6112135c5371ddfba1668a706A6a57B"
+NEWS_STAKING_ADDRESS = "0x42329d3BA44455D3087Da6C912da5123282E343b"
+WORLD_CHAIN_RPC = "https://worldchain-mainnet.g.alchemy.com/v2/tRRCeUyvs7jVWGa5wX85x"
+USDC_ADDRESS = "0x79A02482A880bCE3F13e09Da970dC34db4CD24d1"
+PAYMENT_RECIPIENT = "0xA145882271662D59362924B3fD2Ed22Df5B9331c"
