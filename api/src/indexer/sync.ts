@@ -1,7 +1,7 @@
 import { createPublicClient, http, parseAbiItem, type PublicClient } from 'viem'
 import { worldchain } from 'viem/chains'
 import type { Env } from '../types'
-import { parseUrl } from '../parser/parse'
+import { parseUrl, summarizeWithAI } from '../parser/parse'
 
 // FeedRegistry event signatures
 const EVENTS = {
@@ -16,6 +16,9 @@ const EVENTS = {
   ),
   ItemResolved: parseAbiItem(
     'event ItemResolved(uint256 indexed itemId, uint8 status)'
+  ),
+  ItemAccepted: parseAbiItem(
+    'event ItemAccepted(uint256 indexed itemId)'
   ),
 } as const
 
@@ -37,7 +40,8 @@ export async function syncEvents(
   db: D1Database,
   rpcUrl: string,
   registryAddress: string,
-  fromBlock: bigint = 0n
+  fromBlock: bigint = 0n,
+  ai?: Ai,
 ): Promise<{ syncedToBlock: bigint; eventsProcessed: number }> {
   const client = createPublicClient({
     chain: worldchain,
@@ -52,8 +56,24 @@ export async function syncEvents(
   const contractAddress = registryAddress as `0x${string}`
   let eventsProcessed = 0
 
+  // ABI for reading item metadata (category)
+  const itemsAbi = [{
+    type: 'function' as const,
+    name: 'items',
+    inputs: [{ name: 'itemId', type: 'uint256' as const }],
+    outputs: [
+      { name: 'submitter', type: 'address' as const },
+      { name: 'url', type: 'string' as const },
+      { name: 'metadataHash', type: 'string' as const },
+      { name: 'bond', type: 'uint256' as const },
+      { name: 'submittedAt', type: 'uint256' as const },
+      { name: 'status', type: 'uint8' as const },
+    ],
+    stateMutability: 'view' as const,
+  }]
+
   // Fetch all event types in parallel
-  const [submittedLogs, challengedLogs, voteLogs, resolvedLogs] = await Promise.all([
+  const [submittedLogs, challengedLogs, voteLogs, resolvedLogs, acceptedLogs] = await Promise.all([
     client.getLogs({
       address: contractAddress,
       event: EVENTS.ItemSubmitted,
@@ -78,6 +98,12 @@ export async function syncEvents(
       fromBlock,
       toBlock: latestBlock,
     }),
+    client.getLogs({
+      address: contractAddress,
+      event: EVENTS.ItemAccepted,
+      fromBlock,
+      toBlock: latestBlock,
+    }),
   ])
 
   // Process ItemSubmitted — insert new articles + upsert agent scores
@@ -96,11 +122,38 @@ export async function syncEvents(
       // URL parsing is best-effort
     }
 
+    // Summarize with AI if we have raw text
+    if (ai && parsed.content_summary) {
+      try {
+        const aiSummary = await summarizeWithAI(ai, parsed.content_summary)
+        if (aiSummary) parsed.content_summary = aiSummary
+      } catch {
+        // Fall back to raw oEmbed text
+      }
+    }
+
+    // Read metadataHash from contract (used as category)
+    let category = 'crypto' // default
+    try {
+      const itemData = await client.readContract({
+        address: contractAddress,
+        abi: itemsAbi,
+        functionName: 'items',
+        args: [itemId],
+      }) as [string, string, string, bigint, bigint, number]
+      const metadataHash = itemData[2]
+      if (metadataHash === 'ai' || metadataHash === 'crypto') {
+        category = metadataHash
+      }
+    } catch {
+      // Fall back to default category
+    }
+
     const now = Date.now()
     await db
       .prepare(
-        `INSERT OR IGNORE INTO articles (id, url, title, description, image_url, content_summary, submitter, submitted_at, status, indexed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+        `INSERT OR IGNORE INTO articles (id, url, title, description, image_url, content_summary, submitter, submitted_at, status, category, indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
       )
       .bind(
         Number(itemId),
@@ -111,6 +164,7 @@ export async function syncEvents(
         parsed.content_summary,
         submitter.toLowerCase(),
         now,
+        category,
         now
       )
       .run()
@@ -188,6 +242,29 @@ export async function syncEvents(
         // Submitter lost — no positive score update
         // Challenger won — would need to query challenge event to find challenger
       }
+    }
+
+    eventsProcessed++
+  }
+
+  // Process ItemAccepted — unchallenged items accepted after challenge period
+  for (const log of acceptedLogs) {
+    const { itemId } = log.args as { itemId: bigint }
+
+    const now = Date.now()
+    await db
+      .prepare(`UPDATE articles SET status = 'accepted', resolved_at = ? WHERE id = ? AND status = 'pending'`)
+      .bind(now, Number(itemId))
+      .run()
+
+    // Update submitter's successful_submissions
+    const article = await db
+      .prepare('SELECT submitter FROM articles WHERE id = ?')
+      .bind(Number(itemId))
+      .first<{ submitter: string }>()
+
+    if (article) {
+      await upsertAgentScore(db, article.submitter, { successful_submissions: 1 })
     }
 
     eventsProcessed++

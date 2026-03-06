@@ -121,7 +121,7 @@ enum ItemStatus { Pending, Challenged, Accepted, Rejected }
 
 | Parameter | Default (hackathon) | Description |
 |-----------|-------------------|-------------|
-| `BOND_AMOUNT` | 0.001 ETH | Stake required to submit/challenge |
+| `BOND_AMOUNT` | 1 USDC | Stake required to submit/challenge |
 | `CHALLENGE_PERIOD` | 1 hour | Window to challenge after submission |
 | `VOTING_PERIOD` | 1 hour | Window to vote after challenge |
 | `MIN_VOTES` | 1 | Minimum votes to resolve (quorum) |

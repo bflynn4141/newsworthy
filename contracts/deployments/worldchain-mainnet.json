@@ -15,7 +15,7 @@
     "FeedRegistry": {
       "address": "0xA727Cb7128DfcEf3bB0A79FAC6883D3c65cbeC2A",
       "agentBook": "0xd4c3680c8cd5Ef45F5AbA9402e32D0561A1401cc",
-      "bondAmount": "0.001 ETH",
+      "bondAmount": "1 USDC",
       "challengePeriod": "1 hour",
       "votingPeriod": "1 hour",
       "minVotes": 3

@@ -4,7 +4,9 @@
   "workspaces": [
     "packages/*",
     "api",
-    "agent"
+    "agent",
+    "sim",
+    "web"
   ],
   "devDependencies": {
     "typescript": "^5.8.3"

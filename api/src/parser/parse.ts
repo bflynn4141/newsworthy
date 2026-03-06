@@ -6,6 +6,34 @@ export interface ParsedContent {
 }
 
 /**
+ * Summarize text using Cloudflare Workers AI.
+ * Returns 1-2 clean sentences, no truncation.
+ */
+export async function summarizeWithAI(ai: Ai, text: string): Promise<string | null> {
+  if (!text || text.length < 20) return null
+
+  try {
+    const response = await ai.run('@cf/meta/llama-3.1-8b-instruct', {
+      messages: [
+        {
+          role: 'system',
+          content: 'You summarize tweets and news into 1-2 clean, complete sentences. Never truncate or use ellipsis. Be factual and concise. Output ONLY the summary, nothing else.'
+        },
+        {
+          role: 'user',
+          content: `Summarize this in 1-2 complete sentences:\n\n${text}`
+        }
+      ],
+      max_tokens: 150,
+    }) as { response?: string }
+
+    return response?.response?.trim() || null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Fetch a URL and extract basic metadata using HTML parsing.
  *
  * Extracts og:title, og:description, og:image, and a text summary from
@@ -13,6 +41,11 @@ export interface ParsedContent {
  * uses regex-based extraction which is good enough for news articles.
  */
 export async function parseUrl(url: string): Promise<ParsedContent> {
+  // Use oEmbed for Twitter/X URLs
+  if (/(?:twitter\.com|x\.com)\/\w+\/status\/\d+/.test(url)) {
+    return parseTweet(url)
+  }
+
   const response = await fetch(url, {
     headers: {
       'User-Agent': 'Newsworthy/1.0 (crypto news aggregator)',
@@ -34,6 +67,56 @@ export async function parseUrl(url: string): Promise<ParsedContent> {
   const content_summary = extractBodyText(html, 500)
 
   return { title, description, image_url, content_summary }
+}
+
+/**
+ * Parse a tweet using Twitter's free oEmbed API.
+ * No API key needed. Returns author name + tweet text.
+ */
+async function parseTweet(url: string): Promise<ParsedContent> {
+  const oembedUrl = `https://publish.twitter.com/oembed?url=${encodeURIComponent(url)}&omit_script=true`
+
+  const res = await fetch(oembedUrl, {
+    signal: AbortSignal.timeout(10_000),
+  })
+
+  if (!res.ok) {
+    return { title: null, description: null, image_url: null, content_summary: null }
+  }
+
+  const data = await res.json() as {
+    author_name?: string
+    author_url?: string
+    html?: string
+  }
+
+  // Extract plain text from the oEmbed HTML
+  const tweetText = data.html
+    ? decodeHtmlEntities(
+        data.html
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<[^>]+>/g, '')
+      )
+        .replace(/\s*[—\u2014].*$/s, '') // Remove "— Author (@handle)" footer
+        .replace(/pic\.twitter\.com\/\w+/g, '') // Remove pic.twitter.com links
+        .replace(/https?:\/\/t\.co\/\w+/g, '') // Remove t.co links
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/,?\s*…\s*$/, '') // Remove trailing ellipsis from Twitter's truncation
+    : null
+
+  const authorHandle = data.author_url
+    ? '@' + data.author_url.split('/').pop()
+    : null
+
+  return {
+    title: data.author_name
+      ? `${data.author_name}${authorHandle ? ` (${authorHandle})` : ''}`
+      : null,
+    description: null,
+    image_url: null,
+    content_summary: tweetText,
+  }
 }
 
 /** Extract content from a <meta> tag by property or name attribute. */
@@ -93,7 +176,10 @@ function decodeHtmlEntities(str: string): string {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&#039;/g, "'")
+    .replace(/&#0?39;/g, "'")
     .replace(/&#x27;/g, "'")
     .replace(/&#x2F;/g, '/')
+    .replace(/&mdash;/g, '\u2014')
+    .replace(/&ndash;/g, '\u2013')
+    .replace(/&hellip;/g, '\u2026')
 }

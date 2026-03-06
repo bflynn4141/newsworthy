@@ -3,17 +3,17 @@
   "chainId": 480,
   "rpc": "https://worldchain-mainnet.g.alchemy.com/v2/tRRCeUyvs7jVWGa5wX85x",
   "deployer": "0xA145882271662D59362924B3fD2Ed22Df5B9331c",
-  "deployedAt": "2026-03-05",
-  "note": "Test deployment v4 — USDC bonds, $NEWS token + staking, tweet-only URLs, daily limit, MockAgentBook, 30m periods, 1 min quorum",
+  "deployedAt": "2026-03-06",
+  "note": "Test deployment v5 — 1 USDC bonds (sim-validated), $NEWS token + staking, tweet-only URLs, daily limit, MockAgentBook, 30m periods, 1 min quorum",
   "contracts": {
     "AgentBook": {
       "address": "0x04436Df79E8A4604AF12abe21f275143e6bF47f2",
       "type": "MockAgentBook"
     },
     "FeedRegistry": {
-      "address": "0x0156424Ae6112135c5371ddfba1668a706A6a57B",
+      "address": "0xF6bfE9084a8d615637A3Be609d737F94faC277ca",
       "bondToken": "0x79A02482A880bCE3F13e09Da970dC34db4CD24d1",
-      "bondAmount": "0.1 USDC",
+      "bondAmount": "1 USDC",
       "challengePeriod": "30 minutes",
       "votingPeriod": "30 minutes",
       "minVotes": 1,
@@ -21,14 +21,14 @@
       "maxDailySubmissions": 3
     },
     "NewsToken": {
-      "address": "0x11D1E765302a53e44b172931f963e64BDc6b301D",
+      "address": "0x0b22640664c27434E9D4B7F31E02889fEeAF822C",
       "symbol": "NEWS",
       "decimals": 18,
-      "minter": "0x0156424Ae6112135c5371ddfba1668a706A6a57B"
+      "minter": "0xF6bfE9084a8d615637A3Be609d737F94faC277ca"
     },
     "NewsStaking": {
-      "address": "0x42329d3BA44455D3087Da6C912da5123282E343b",
-      "stakedToken": "0x11D1E765302a53e44b172931f963e64BDc6b301D",
+      "address": "0x2d4c0d0a76bA7Ab61b9bed5A6950E216D539CA74",
+      "stakedToken": "0x0b22640664c27434E9D4B7F31E02889fEeAF822C",
       "rewardToken": "0x79A02482A880bCE3F13e09Da970dC34db4CD24d1"
     }
   }

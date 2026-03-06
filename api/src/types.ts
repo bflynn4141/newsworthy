@@ -1,5 +1,6 @@
 export type Env = {
   DB: D1Database
+  AI: Ai
   AGENTBOOK_ADDRESS: string
   FEED_REGISTRY_ADDRESS: string
   NEWS_STAKING_ADDRESS: string
@@ -22,6 +23,7 @@ export interface Article {
   challenge_votes_for: number
   challenge_votes_against: number
   resolved_at: number | null
+  category: string
   indexed_at: number
 }
 

@@ -9,9 +9,9 @@
 | Contract | Address | Status |
 |----------|---------|--------|
 | MockAgentBook | `0x04436Df79E8A4604AF12abe21f275143e6bF47f2` | Live |
-| FeedRegistry | `0x0156424Ae6112135c5371ddfba1668a706A6a57B` | Live, 8 items, all accepted |
-| NewsToken | `0x11D1E765302a53e44b172931f963e64BDc6b301D` | Live, minter = FeedRegistry |
-| NewsStaking | `0x42329d3BA44455D3087Da6C912da5123282E343b` | Live, no stakers yet |
+| FeedRegistry | `0xF6bfE9084a8d615637A3Be609d737F94faC277ca` | Live (v5), 1 USDC bond, admin setters |
+| NewsToken | `0x0b22640664c27434E9D4B7F31E02889fEeAF822C` | Live, minter = FeedRegistry |
+| NewsStaking | `0x2d4c0d0a76bA7Ab61b9bed5A6950E216D539CA74` | Live, no stakers yet |
 | USDC | `0x79A02482A880bCE3F13e09Da970dC34db4CD24d1` | World Chain native USDC |
 
 ### x402 Paid API (Cloudflare Worker) — LIVE
