@@ -60,7 +60,10 @@ app.post('/sync', async (c) => {
     fromBlock
   )
 
-  return c.json(result)
+  return c.json({
+    syncedToBlock: result.syncedToBlock.toString(),
+    eventsProcessed: result.eventsProcessed,
+  })
 })
 
 // 404 fallback
