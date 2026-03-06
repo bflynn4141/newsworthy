@@ -24,7 +24,16 @@
 // Flags:
 //   --test    Use test contracts (MockAgentBook, relaxed params)
 
+import { performance } from 'node:perf_hooks'
 import { parseArgs } from 'node:util'
+
+// Prevent perf_hooks memory leak in long-running dashboard sessions.
+// React/tsx emit performance marks/measures on every render; after hours
+// the buffer hits 1M+ entries and OOMs Node.  Flush every 30s.
+setInterval(() => {
+  performance.clearMarks()
+  performance.clearMeasures()
+}, 30_000)
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import {
