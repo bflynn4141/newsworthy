@@ -319,8 +319,13 @@ export function computeSubmitterScore(
   const rejected = theirs.filter(i => i.status === 3).length
   const total = accepted + rejected
 
-  if (total === 0) return 5.0 // no history = neutral
-  return Math.round((1 + (accepted / total) * 9) * 10) / 10
+  if (total === 0) return 3.0 // unproven — must earn credibility
+  // Bayesian-style: blend actual ratio with a prior of 3.0
+  // More history = more weight on actual performance
+  const prior = 3.0
+  const priorWeight = 2 // equivalent to 2 "phantom" items at the prior
+  const blended = (accepted * 10 + priorWeight * prior) / (total + priorWeight)
+  return Math.round(Math.min(10, Math.max(1, blended)) * 10) / 10
 }
 
 // ── Main Analysis Function ───────────────────────────────────────────────────

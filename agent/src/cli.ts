@@ -9,6 +9,7 @@
 //   status          Registry overview: bond, periods, deployer balance
 //   items           List all items with ID, status, submitter, URL
 //   item <id>       Detail view for a single item + challenge info
+//   leaderboard     $NEWS earnings leaderboard (who earned, not who holds)
 //   register        Check if deployer is registered in AgentBook
 //   dashboard       Live TUI dashboard (auto-refreshing, requires Node)
 //
@@ -30,6 +31,7 @@ import {
   createPublicClient,
   createWalletClient,
   http,
+  parseAbiItem,
   formatEther,
   formatUnits,
   type Address,
@@ -438,6 +440,57 @@ async function cmdWithdraw(
   console.log(`\x1b[32m✓\x1b[0m Withdrawn: ${txLink(hash)}\n`)
 }
 
+async function cmdLeaderboard(
+  client: PublicClient, registryAddr: Address,
+) {
+  const newsRewarded = parseAbiItem(
+    'event NewsRewarded(uint256 indexed itemId, address indexed submitter, uint256 amount)'
+  )
+
+  // Start from deployment block to avoid RPC range limits
+  const DEPLOY_BLOCK = 26707740n
+
+  const logs = await client.getLogs({
+    address: registryAddr,
+    event: newsRewarded,
+    fromBlock: DEPLOY_BLOCK,
+    toBlock: 'latest',
+  })
+
+  // Accumulate earnings per address
+  const earned = new Map<string, { total: bigint; items: number }>()
+  for (const log of logs) {
+    const { submitter, amount } = log.args as { submitter: string; amount: bigint }
+    const addr = submitter.toLowerCase()
+    const prev = earned.get(addr) ?? { total: 0n, items: 0 }
+    earned.set(addr, { total: prev.total + amount, items: prev.items + 1 })
+  }
+
+  if (earned.size === 0) {
+    console.log('\nNo $NEWS earned yet.\n')
+    return
+  }
+
+  // Sort by total earned descending
+  const sorted = [...earned.entries()].sort((a, b) =>
+    b[1].total > a[1].total ? 1 : b[1].total < a[1].total ? -1 : 0
+  )
+
+  console.log(`\n${BOLD}═══ $NEWS Leaderboard (earned, not held) ═══${RESET}\n`)
+  console.log(`  ${BOLD}#   Address                                      Earned         Items${RESET}`)
+  console.log(`  ${'─'.repeat(72)}`)
+
+  for (let i = 0; i < sorted.length; i++) {
+    const [addr, { total, items }] = sorted[i]
+    const rank = `${i + 1}`.padStart(2)
+    const display = `${addr.slice(0, 6)}…${addr.slice(-4)}`
+    const newsAmt = formatUnits(total, 18)
+    const medal = i === 0 ? ' \u2B50' : i === 1 ? ' \u25C6' : i === 2 ? ' \u25CB' : '  '
+    console.log(`  ${rank}${medal} ${display}  ${newsAmt.padStart(20)} $NEWS   ${items} item${items !== 1 ? 's' : ''}`)
+  }
+  console.log()
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -464,6 +517,7 @@ ${BOLD}Read commands:${RESET}
   status              Registry overview
   items               List all items
   item <id>           Detail view for one item
+  leaderboard         $NEWS earnings ranking
   register            Check AgentBook registration
   dashboard           Live TUI dashboard (auto-refreshing)
 
@@ -514,6 +568,10 @@ ${BOLD}Flags:${RESET}
         await cmdItem(client, registryAddr, BigInt(id))
         break
       }
+
+      case 'leaderboard':
+        await cmdLeaderboard(client, registryAddr)
+        break
 
       case 'register':
         await cmdRegister(client, agentBookAddr, deployer)
