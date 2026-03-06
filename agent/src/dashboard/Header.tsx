@@ -2,12 +2,21 @@ import React from 'react'
 import { Box, Text } from 'ink'
 import { formatUnits } from 'viem'
 import type { RegistryConfig, LlmStatus } from './useFeedData.js'
+import { useAnimatedValue } from './useAnimatedValue.js'
 
 function shortToken(amount: bigint, decimals: number): string {
   const full = formatUnits(amount, decimals)
   const dot = full.indexOf('.')
   if (dot === -1) return full
   return full.slice(0, dot + 3) // 2 decimal places
+}
+
+function bigintToDisplay(amount: bigint, decimals: number): number {
+  return Number(formatUnits(amount, decimals))
+}
+
+function formatDisplay(value: number, decimals: number): string {
+  return value.toFixed(Math.min(decimals, 2))
 }
 
 function formatCountdown(seconds: number): string {
@@ -34,6 +43,12 @@ export default function Header({ isTest, config, totalItems, balance, newsBalanc
   const maxDaily = config ? Number(config.maxDailySubmissions) : 3
   const remaining = maxDaily - dailySubmissions
 
+  // Animated balances — only animate when values actually change
+  const tokenDecimals = config?.tokenDecimals ?? 6
+  const animatedBalance = useAnimatedValue(bigintToDisplay(balance, tokenDecimals))
+  const animatedNews = useAnimatedValue(bigintToDisplay(newsBalance, 18))
+  const animatedWithdraw = useAnimatedValue(bigintToDisplay(withdrawable, tokenDecimals))
+
   return (
     <Box flexDirection="column">
       <Box justifyContent="space-between">
@@ -48,12 +63,12 @@ export default function Header({ isTest, config, totalItems, balance, newsBalanc
           ) : null}
         </Text>
         <Text>
-          {config ? `${shortToken(balance, config.tokenDecimals)} ${config.tokenSymbol}` : '...'}
+          {config ? `${formatDisplay(animatedBalance, tokenDecimals)} ${config.tokenSymbol}` : '...'}
           {'  \u2502  '}
-          {config ? `${shortToken(newsBalance, 18)} $NEWS` : '...'}
+          {config ? `${formatDisplay(animatedNews, 2)} $NEWS` : '...'}
           {'  \u2502  '}
           {config && withdrawable > 0n ? (
-            <Text color="green">{shortToken(withdrawable, config.tokenDecimals)} {config.tokenSymbol} claimable</Text>
+            <Text color="green">{formatDisplay(animatedWithdraw, tokenDecimals)} {config.tokenSymbol} claimable</Text>
           ) : (
             <Text dimColor>nothing to claim</Text>
           )}

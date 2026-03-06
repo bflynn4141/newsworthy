@@ -1,6 +1,8 @@
 import React from 'react'
 import { Box, Text } from 'ink'
 import type { FeedItem } from './useFeedData.js'
+import { useAnimatedValue } from './useAnimatedValue.js'
+import { useStatusFlash } from './useStatusFlash.js'
 
 function formatTime(seconds: number): string {
   if (seconds <= 0) return '\u2713'
@@ -53,6 +55,14 @@ export default function ItemCard({ item, isSelected, minVotes = 1 }: Props) {
   const addr = shortAddress(item.submitter)
   const rep = analysis?.submitterScore
 
+  // Animated vote counts for challenged items
+  const votesFor = useAnimatedValue(item.challenge ? Number(item.challenge.votesFor) : 0, 400)
+  const votesAgainst = useAnimatedValue(item.challenge ? Number(item.challenge.votesAgainst) : 0, 400)
+
+  // Status flash — highlight when item changes status
+  const isFlashing = useStatusFlash(item.status)
+  const flashColor = item.status === 2 ? 'green' : item.status === 3 ? 'red' : 'cyan'
+
   // Time line (pending or challenged)
   const hasTimer = item.status === 0 || (item.status === 1 && item.challenge)
   const timerSeconds = item.status === 1 && item.challenge
@@ -60,14 +70,27 @@ export default function ItemCard({ item, isSelected, minVotes = 1 }: Props) {
     : item.timeRemaining
   const timerExpired = hasTimer && timerSeconds <= 0
 
+  // Countdown urgency: red when < 60s
+  const timerColor = timerExpired ? 'green' : timerSeconds < 60 ? 'red' : 'yellow'
+
   return (
     <Box flexDirection="column" marginBottom={1}>
       {/* Line 1: ID + URL */}
       <Text>
         {isSelected ? <Text color="cyan" bold>{'\u25B8 '}</Text> : '  '}
-        <Text bold inverse={isSelected}>#{item.id}</Text>
+        {isFlashing ? (
+          <Text bold inverse={!!isSelected} color={flashColor}>#{item.id}</Text>
+        ) : (
+          <Text bold inverse={!!isSelected}>#{item.id}</Text>
+        )}
         {'  '}
-        <Text dimColor={!isSelected} color={isSelected ? 'cyan' : undefined}>{urlDisplay}</Text>
+        {isFlashing ? (
+          <Text color={flashColor}>{urlDisplay}</Text>
+        ) : isSelected ? (
+          <Text color="cyan">{urlDisplay}</Text>
+        ) : (
+          <Text dimColor>{urlDisplay}</Text>
+        )}
       </Text>
 
       {/* Line 2 (challenged only): Quorum progress bar */}
@@ -75,11 +98,11 @@ export default function ItemCard({ item, isSelected, minVotes = 1 }: Props) {
         <Text>
           {'  '}
           <Text color="cyan">
-            {quorumBar(Number(item.challenge.votesFor + item.challenge.votesAgainst), minVotes)}
+            {quorumBar(Math.round(votesFor + votesAgainst), minVotes)}
           </Text>
           {' '}
           <Text dimColor>
-            {(item.challenge.votesFor + item.challenge.votesAgainst).toString()}/{minVotes} votes
+            {Math.round(votesFor + votesAgainst)}/{minVotes} votes
           </Text>
         </Text>
       )}
@@ -89,7 +112,7 @@ export default function ItemCard({ item, isSelected, minVotes = 1 }: Props) {
         {'  '}
         {hasTimer && (
           <>
-            <Text color={timerExpired ? 'green' : 'yellow'}>
+            <Text color={timerColor} bold={timerSeconds < 60 && timerSeconds > 0}>
               {'\u23F1'} {formatTime(timerSeconds)}
             </Text>
             {'  '}
