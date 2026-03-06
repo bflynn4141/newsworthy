@@ -65,65 +65,99 @@
 
 ---
 
-## Next: Web App + World App
+## Production Plan
 
-### Web App (public feed viewer)
+### Two-Tier Architecture
 
-Build a web frontend for browsing the curated feed. Anyone can view accepted articles.
+```
+Agents (CLI/Claude Code)          Users (World App)
+       |                                |
+  x402 API (Base)               Direct on-chain (Base)
+  AgentKit extension            MiniKit + World ID
+  verified = free               register in AgentBook
+  unverified = $0.01            submit / vote / challenge
+       |                                |
+       +------------ AgentBook ---------+
+                 (World's, on Base)
+           0xE1D1D3526A6FAa37eb36bD10B933C1b77f4561a4
+```
 
-**Approach:**
-- React/Next.js app
-- Reads from the x402 API (`/stats` is free, `/feed` requires payment)
-- OR reads directly from D1 via a public read endpoint (add one if needed)
-- Show accepted items sorted by newest, with article cards (title, description, image, submitter)
-- Link to original tweets
-- Show leaderboard (who earned most $NEWS)
-- Show registry stats (total items, acceptance rate, active agents)
+**Key insight:** Agents and users share the same AgentBook identity. Register once via World ID, interact everywhere.
 
-**Key decision:** Should the web app pay x402 per request (server-side), or should we add a free public read endpoint? The x402 gate is designed for agent-to-agent payments. Human visitors should probably get free read access.
+### Phase 1: Gameplay Iteration (CURRENT)
 
-### World App (mini app for curation)
+Testing with MockAgentBook on World Chain. All game mechanics live here.
 
-Build a World App mini app that lets World ID-verified humans participate in curation.
+- FeedRegistry, NewsToken, NewsStaking on World Chain (480)
+- MockAgentBook for instant test registration
+- Iterate on bond amounts, challenge periods, voting mechanics
+- Run edge case simulations (sybil, collusion, quorum)
+- **Admin functions added** — owner can tune parameters without redeploying
 
-**What it enables:**
-- **Vote on submissions** — World ID proves you're human, no sybil attacks
-- **Challenge items** — Bond USDC to challenge questionable submissions
-- **Submit articles** — Submit URLs to the feed (requires registration + USDC bond)
-- **View your $NEWS earnings** — Track rewards from accepted submissions
+### Phase 2: Frontends
 
-**World ID integration:**
-- Currently using MockAgentBook (manual registration)
-- Production: World ID verification on-chain via real AgentBook contract
-- `worldchain-mainnet.json` has the production AgentBook at `0xd4c3680c8cd5Ef45F5AbA9402e32D0561A1401cc`
-- World ID Router: `0x17B354dD2595411ff79041f930e491A4Df39A278`
-- App ID: `app_1325590145579e6d6df0809d48040738`
-- Action: `newsworthy-register`
+Build both frontends while still on World Chain + MockAgentBook.
 
-**Architecture:**
-- World App mini apps use web tech (React) embedded in the World App
-- IDKit SDK for World ID verification
-- Users need USDC on World Chain for bonds
-- Could use Pimlico paymaster for gasless UX (ERC-4337)
+**Web App (public feed viewer)**
+- React/Next.js, deployed to Vercel
+- Free public endpoint for human visitors (add to API if needed)
+- x402 gate stays for agent-to-agent queries
+- Show: accepted items, leaderboard, registry stats
+
+**World App (mini app for curation)**
+- `@worldcoin/minikit-js` (v1.11.0) + `@worldcoin/minikit-react` (v1.9.14)
+- Browse the feed + vote on submissions
+- Mock World ID for testing (switch to real when migrating)
+- Submit articles + challenge questionable items
+
+### Phase 3: Base Migration (WHEN READY)
+
+Trigger: game mechanics stable + frontends working + real humans ready to test.
+
+1. Deploy NewsToken, NewsStaking, FeedRegistry on Base mainnet
+2. FeedRegistry constructor: `agentBook = 0xE1D1D3526A6FAa37eb36bD10B933C1b77f4561a4` (World's AgentBook on Base)
+3. `bondToken = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (USDC on Base)
+4. Install `@worldcoin/agentkit` from `github:worldcoin/agentkit`
+5. Wire `createAgentkitHooks()` into x402 middleware — verified agents = free, bots = $0.01
+6. Update World App to use real World ID verification via MiniKit
+7. Update API worker RPC + contract addresses
+8. Update agent CLI config
+
+**World's AgentKit repo:** `github.com/worldcoin/agentkit` (not on npm yet, install from GitHub)
+**AgentKit package:** `@worldcoin/agentkit` (in `agentkit/` workspace of the repo)
+**Dependencies:** `@x402/core`, `siwe`, `viem`, `zod`
+
+### Phase 4: Growth
+
+- Auto-accepter cron (Cloudflare scheduled trigger)
+- Pimlico/ERC-4337 for gasless UX (users only need USDC)
+- Revenue deposit cron → x402 income to $NEWS stakers
+- Agent SDK: let Claude Code agents query + submit programmatically
 
 ---
 
-## Other Remaining Work
-
-### P1 — Auto-accepter cron
-Cloudflare scheduled trigger that calls `acceptItem()` on items past their challenge period. Currently done manually via CLI.
+## Remaining Work (Current Phase)
 
 ### P1 — Fix event indexer
 The `/sync` endpoint doesn't capture `ItemResolved` events. Fix the event signature matching in `api/src/indexer/sync.ts`.
 
+### P1 — Auto-accepter cron
+Cloudflare scheduled trigger that calls `acceptItem()` on items past their challenge period. Currently done manually via CLI.
+
+### P1 — Build web app
+Public feed viewer. React/Next.js on Vercel.
+
+### P1 — Build World App mini app
+Curation UI with voting. MiniKit SDK.
+
 ### P2 — Pimlico gasless transactions
-ERC-4337 account abstraction so users don't need ETH for gas. Only need USDC for bonds.
+ERC-4337 so users don't need ETH for gas.
 
 ### P2 — Revenue deposit cron
-Batch `depositRevenue()` calls to NewsStaking so x402 query revenue flows to $NEWS stakers.
+Batch `depositRevenue()` calls to NewsStaking.
 
 ### P3 — Remaining tweet migration
-4 tweets from v3 still not in v4 (tradaboringfi, ababorode, AesPoker, 0xDeployer).
+4 tweets from v3 still not in v4.
 
 ---
 

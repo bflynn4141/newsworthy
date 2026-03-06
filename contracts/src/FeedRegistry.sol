@@ -30,6 +30,8 @@ contract FeedRegistry {
     error NothingToWithdraw();
     error TransferFailed();
     error DailyLimitReached();
+    error NotOwner();
+    error ZeroAddress();
 
     ///////////////////////////////////////////////////////////////////////////////
     ///                                  EVENTS                                ///
@@ -42,6 +44,8 @@ contract FeedRegistry {
     event ItemAccepted(uint256 indexed itemId);
     event Withdrawal(address indexed account, uint256 amount);
     event NewsRewarded(uint256 indexed itemId, address indexed submitter, uint256 amount);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event ParameterUpdated(string name, uint256 value);
 
     ///////////////////////////////////////////////////////////////////////////////
     ///                                  TYPES                                 ///
@@ -72,6 +76,7 @@ contract FeedRegistry {
     ///                              STATE                                      ///
     //////////////////////////////////////////////////////////////////////////////
 
+    address public owner;
     IAgentBook public immutable agentBook;
     IERC20 public immutable bondToken;      // USDC or other ERC-20
     INewsToken public immutable newsToken;  // $NEWS reward token
@@ -92,6 +97,15 @@ contract FeedRegistry {
     mapping(uint256 => mapping(uint256 => uint256)) public dailySubmissions; // humanId => day => count
 
     ///////////////////////////////////////////////////////////////////////////////
+    ///                              MODIFIERS                                 ///
+    //////////////////////////////////////////////////////////////////////////////
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////
     ///                              CONSTRUCTOR                                ///
     //////////////////////////////////////////////////////////////////////////////
 
@@ -106,6 +120,7 @@ contract FeedRegistry {
         uint256 _newsPerItem,
         uint256 _maxDailySubmissions
     ) {
+        owner = msg.sender;
         agentBook = _agentBook;
         bondToken = _bondToken;
         newsToken = _newsToken;
@@ -115,6 +130,46 @@ contract FeedRegistry {
         minVotes = _minVotes;
         newsPerItem = _newsPerItem;
         maxDailySubmissions = _maxDailySubmissions;
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////
+    ///                              ADMIN                                      ///
+    //////////////////////////////////////////////////////////////////////////////
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+
+    function setBondAmount(uint256 _bondAmount) external onlyOwner {
+        bondAmount = _bondAmount;
+        emit ParameterUpdated("bondAmount", _bondAmount);
+    }
+
+    function setChallengePeriod(uint256 _challengePeriod) external onlyOwner {
+        challengePeriod = _challengePeriod;
+        emit ParameterUpdated("challengePeriod", _challengePeriod);
+    }
+
+    function setVotingPeriod(uint256 _votingPeriod) external onlyOwner {
+        votingPeriod = _votingPeriod;
+        emit ParameterUpdated("votingPeriod", _votingPeriod);
+    }
+
+    function setMinVotes(uint256 _minVotes) external onlyOwner {
+        minVotes = _minVotes;
+        emit ParameterUpdated("minVotes", _minVotes);
+    }
+
+    function setNewsPerItem(uint256 _newsPerItem) external onlyOwner {
+        newsPerItem = _newsPerItem;
+        emit ParameterUpdated("newsPerItem", _newsPerItem);
+    }
+
+    function setMaxDailySubmissions(uint256 _maxDailySubmissions) external onlyOwner {
+        maxDailySubmissions = _maxDailySubmissions;
+        emit ParameterUpdated("maxDailySubmissions", _maxDailySubmissions);
     }
 
     ///////////////////////////////////////////////////////////////////////////////
