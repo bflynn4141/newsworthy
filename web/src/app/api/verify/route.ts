@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+
 const RP_ID = process.env.RP_ID as string;
 
 export async function POST(req: NextRequest) {
