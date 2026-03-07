@@ -4,34 +4,31 @@ import { Header } from "@/components/header";
 import { FeedTabs } from "@/components/feed-tabs";
 import { FeedItem } from "@/components/feed-item";
 import { Sidebar } from "@/components/sidebar";
-import { AuthGate } from "@/components/auth-gate";
+import { LandingPage } from "@/components/landing-page";
 import { isAuthenticated } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
-
-const FREE_ITEMS = 3;
 
 export default async function Home({
   searchParams,
 }: {
   searchParams: Promise<{ category?: string }>;
 }) {
+  const authed = await isAuthenticated();
+
+  if (!authed) {
+    return <LandingPage />;
+  }
+
   const params = await searchParams;
   const category = params.category;
   const activeTab = category || "all";
 
-  const [feedData, stats, agentsData, authed] = await Promise.all([
+  const [feedData, stats, agentsData] = await Promise.all([
     fetchFeed(50, 0, category),
     fetchStats(),
     fetchAgents(),
-    isAuthenticated(),
   ]);
-
-  const visibleItems = authed
-    ? feedData.items
-    : feedData.items.slice(0, FREE_ITEMS);
-
-  const showGate = !authed && feedData.items.length > FREE_ITEMS;
 
   return (
     <div className="min-h-screen flex justify-center">
@@ -53,10 +50,9 @@ export default async function Home({
           </div>
         ) : (
           <div>
-            {visibleItems.map((article) => (
+            {feedData.items.map((article) => (
               <FeedItem key={article.id} article={article} />
             ))}
-            {showGate && <AuthGate />}
           </div>
         )}
       </main>
