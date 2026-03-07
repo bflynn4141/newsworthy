@@ -2,15 +2,29 @@ import { NextResponse } from "next/server";
 import { signRequest } from "@worldcoin/idkit/signing";
 
 export async function POST(req: Request) {
-  const { action } = await req.json();
-  const signingKey = process.env.RP_SIGNING_KEY!;
+  try {
+    const { action } = await req.json();
+    const signingKey = process.env.RP_SIGNING_KEY;
 
-  const { sig, nonce, createdAt, expiresAt } = signRequest(action, signingKey);
+    if (!signingKey) {
+      return NextResponse.json(
+        { error: "RP_SIGNING_KEY not configured" },
+        { status: 500 }
+      );
+    }
 
-  return NextResponse.json({
-    sig,
-    nonce,
-    created_at: createdAt,
-    expires_at: expiresAt,
-  });
+    const { sig, nonce, createdAt, expiresAt } = signRequest(action, signingKey);
+
+    return NextResponse.json({
+      sig,
+      nonce,
+      created_at: createdAt,
+      expires_at: expiresAt,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: "Failed to sign request", detail: String(err) },
+      { status: 500 }
+    );
+  }
 }
