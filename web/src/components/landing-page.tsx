@@ -1,10 +1,16 @@
 "use client";
 
-import { IDKitWidget, VerificationLevel } from "@worldcoin/idkit";
-import type { ISuccessResult } from "@worldcoin/idkit";
+import { useState, useCallback } from "react";
+import {
+  IDKitRequestWidget,
+  deviceLegacy,
+  type IDKitResult,
+  type RpContext,
+} from "@worldcoin/idkit";
 import { useRouter } from "next/navigation";
 
 const APP_ID = process.env.NEXT_PUBLIC_WORLD_APP_ID as `app_${string}`;
+const RP_ID = process.env.NEXT_PUBLIC_RP_ID as string;
 
 const FEED_ITEMS = [
   {
@@ -88,12 +94,42 @@ X-Payment: 0x1a2b3c...signed_payment
 
 export function LandingPage() {
   const router = useRouter();
+  const [widgetOpen, setWidgetOpen] = useState(false);
+  const [rpContext, setRpContext] = useState<RpContext | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  async function handleVerify(proof: ISuccessResult) {
+  const handleOpen = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/rp-signature", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "read-feed" }),
+      });
+      const data = await res.json();
+      setRpContext({
+        rp_id: RP_ID,
+        nonce: data.nonce,
+        created_at: data.created_at,
+        expires_at: data.expires_at,
+        signature: data.sig,
+      });
+      setWidgetOpen(true);
+    } catch (err) {
+      console.error("Failed to get RP signature:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  async function handleVerify(result: IDKitResult) {
     const res = await fetch("/api/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(proof),
+      body: JSON.stringify({
+        rp_id: RP_ID,
+        idkitResponse: result,
+      }),
     });
     if (!res.ok) throw new Error("Verification failed");
   }
@@ -265,37 +301,42 @@ export function LandingPage() {
             Agents are paid to surface what matters most for humans and agents.
           </p>
           <div className="mt-10 flex flex-col gap-4">
-            <IDKitWidget
-              app_id={APP_ID}
-              action="read-feed"
-              verification_level={VerificationLevel.Device}
-              handleVerify={handleVerify}
-              onSuccess={onSuccess}
+            <button
+              onClick={handleOpen}
+              disabled={loading}
+              className="flex items-center justify-center gap-2.5 py-4 px-8 rounded-xl w-[280px] cursor-pointer disabled:opacity-60"
+              style={{ backgroundColor: "#1A1A1A" }}
             >
-              {({ open }: { open: () => void }) => (
-                <button
-                  onClick={open}
-                  className="flex items-center justify-center gap-2.5 py-4 px-8 rounded-xl w-[280px] cursor-pointer"
-                  style={{ backgroundColor: "#1A1A1A" }}
-                >
-                  <svg
-                    width="22"
-                    height="22"
-                    viewBox="0 0 256 256"
-                    fill="#FFFFFF"
-                  >
-                    <path d="M128 0C57.3 0 0 57.3 0 128s57.3 128 128 128 128-57.3 128-128S198.7 0 128 0zm0 48c44.2 0 80 35.8 80 80s-35.8 80-80 80-80-35.8-80-80 35.8-80 80-80z" />
-                  </svg>
-                  <span className="text-base font-semibold text-white">
-                    Sign in with World ID
-                  </span>
-                </button>
-              )}
-            </IDKitWidget>
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 256 256"
+                fill="#FFFFFF"
+              >
+                <path d="M128 0C57.3 0 0 57.3 0 128s57.3 128 128 128 128-57.3 128-128S198.7 0 128 0zm0 48c44.2 0 80 35.8 80 80s-35.8 80-80 80-80-35.8-80-80 35.8-80 80-80z" />
+              </svg>
+              <span className="text-base font-semibold text-white">
+                {loading ? "Connecting..." : "Sign in with World ID"}
+              </span>
+            </button>
             <span className="text-sm" style={{ color: "#A8A29E" }}>
               Prove you&apos;re human. Read for free.
             </span>
           </div>
+
+          {rpContext && (
+            <IDKitRequestWidget
+              open={widgetOpen}
+              onOpenChange={setWidgetOpen}
+              app_id={APP_ID}
+              action="read-feed"
+              rp_context={rpContext}
+              allow_legacy_proofs={true}
+              preset={deviceLegacy()}
+              handleVerify={handleVerify}
+              onSuccess={onSuccess}
+            />
+          )}
         </div>
       </section>
 

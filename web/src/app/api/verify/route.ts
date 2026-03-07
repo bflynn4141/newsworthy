@@ -1,23 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const APP_ID = process.env.NEXT_PUBLIC_WORLD_APP_ID as string;
-const ACTION = "read-feed";
+const RP_ID = process.env.RP_ID as string;
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  const { rp_id, idkitResponse } = await req.json();
 
+  // Forward the IDKit result payload as-is to v4 endpoint
   const verifyRes = await fetch(
-    `https://developer.worldcoin.org/api/v2/verify/${APP_ID}`,
+    `https://developer.world.org/api/v4/verify/${rp_id || RP_ID}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        nullifier_hash: body.nullifier_hash,
-        merkle_root: body.merkle_root,
-        proof: body.proof,
-        verification_level: body.verification_level,
-        action: ACTION,
-      }),
+      body: JSON.stringify(idkitResponse),
     }
   );
 
@@ -29,8 +23,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Extract nullifier from v4 response for session cookie
+  const verifyData = await verifyRes.json();
+  // v4 responses have nullifier in the first response item
+  const nullifier =
+    verifyData.responses?.[0]?.nullifier ||
+    verifyData.nullifier_hash ||
+    crypto.randomUUID();
+
   // Set a session cookie — HMAC-signed nullifier hash
-  const nullifier = body.nullifier_hash;
   const secret = process.env.SESSION_SECRET || "newsworthy-dev-secret";
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
