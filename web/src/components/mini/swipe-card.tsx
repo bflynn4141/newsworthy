@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useCallback } from "react";
+import { categoryColor, extractHandle, formatTimeRemaining, timeAgo } from "@/lib/utils";
 
 interface SwipeCardProps {
   item: {
@@ -11,48 +12,25 @@ interface SwipeCardProps {
     submitter: string;
     totalVotes: number;
     category: string;
+    bond?: string;
+    votingEndsAt?: number;
+    votesFor?: number;
+    votesAgainst?: number;
+    challengedAt?: number;
   };
   estimatedReward: string;
   onVote: (direction: "keep" | "remove") => void;
-}
-
-function categoryLabel(cat: string): string {
-  switch (cat.toLowerCase()) {
-    case "ai":
-      return "AI";
-    case "defi":
-      return "DeFi";
-    case "infrastructure":
-      return "Infra";
-    case "nft":
-      return "NFT";
-    default:
-      return cat;
-  }
-}
-
-function categoryColor(cat: string): string {
-  switch (cat.toLowerCase()) {
-    case "ai":
-      return "#8B5CF6";
-    case "defi":
-      return "#10B981";
-    case "infrastructure":
-      return "#F59E0B";
-    case "nft":
-      return "#EC4899";
-    default:
-      return "#6B7280";
-  }
+  onDrag?: (offset: number) => void;
 }
 
 const SWIPE_THRESHOLD = 80;
 
-export function SwipeCard({ item, estimatedReward, onVote }: SwipeCardProps) {
+export function SwipeCard({ item, estimatedReward, onVote, onDrag }: SwipeCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [offset, setOffset] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [exiting, setExiting] = useState<"keep" | "remove" | null>(null);
+  const [avatarFailed, setAvatarFailed] = useState(false);
   const startX = useRef(0);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
@@ -64,7 +42,8 @@ export function SwipeCard({ item, estimatedReward, onVote }: SwipeCardProps) {
     if (!isDragging) return;
     const diff = e.touches[0].clientX - startX.current;
     setOffset(diff);
-  }, [isDragging]);
+    onDrag?.(diff);
+  }, [isDragging, onDrag]);
 
   const handleTouchEnd = useCallback(() => {
     setIsDragging(false);
@@ -75,14 +54,22 @@ export function SwipeCard({ item, estimatedReward, onVote }: SwipeCardProps) {
       onVote(direction);
     } else {
       setOffset(0);
+      onDrag?.(0);
     }
-  }, [offset, onVote]);
+  }, [offset, onVote, onDrag]);
 
   // Visual feedback
   const rotation = offset * 0.08;
   const opacity = Math.min(Math.abs(offset) / SWIPE_THRESHOLD, 1);
   const showKeep = offset > 20;
   const showRemove = offset < -20;
+
+  const handle = extractHandle(item.url);
+  const timer = item.votingEndsAt ? formatTimeRemaining(item.votingEndsAt) : null;
+  const parsedBond = item.bond ? parseFloat(item.bond) : NaN;
+  const bondDisplay = Number.isFinite(parsedBond) ? `${parsedBond} USDC` : "1 USDC";
+  const totalVoteCount = (item.votesFor ?? 0) + (item.votesAgainst ?? 0);
+  const challengedAgo = item.challengedAt ? timeAgo(item.challengedAt) : null;
 
   return (
     <div
@@ -101,11 +88,12 @@ export function SwipeCard({ item, estimatedReward, onVote }: SwipeCardProps) {
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
     >
       {/* KEEP stamp */}
       {showKeep && (
         <div
-          className="absolute top-6 left-6 z-10 px-4 py-1.5 rounded-lg border-3 font-extrabold text-xl tracking-wider"
+          className="absolute top-6 left-6 z-10 px-4 py-1.5 rounded-lg border-[3px] font-extrabold text-xl tracking-wider"
           style={{
             color: "#22C55E",
             borderColor: "#22C55E",
@@ -120,7 +108,7 @@ export function SwipeCard({ item, estimatedReward, onVote }: SwipeCardProps) {
       {/* REMOVE stamp */}
       {showRemove && (
         <div
-          className="absolute top-6 right-6 z-10 px-4 py-1.5 rounded-lg border-3 font-extrabold text-xl tracking-wider"
+          className="absolute top-6 right-6 z-10 px-4 py-1.5 rounded-lg border-[3px] font-extrabold text-xl tracking-wider"
           style={{
             color: "#EF4444",
             borderColor: "#EF4444",
@@ -134,23 +122,68 @@ export function SwipeCard({ item, estimatedReward, onVote }: SwipeCardProps) {
 
       {/* Card content */}
       <div className="p-5">
-        {/* Category + votes */}
+        {/* Row 1: CHALLENGED badge + timer */}
         <div className="flex items-center justify-between mb-3">
-          <span
-            className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
-            style={{
-              backgroundColor: categoryColor(item.category) + "18",
-              color: categoryColor(item.category),
-            }}
-          >
-            {categoryLabel(item.category)}
-          </span>
-          <span className="text-[11px]" style={{ color: "#A8A29E" }}>
-            {item.totalVotes} vote{item.totalVotes !== 1 ? "s" : ""}
+          <div className="flex items-center gap-1.5">
+            <div
+              className="w-2 h-2 rounded-full"
+              style={{ backgroundColor: "#F97316" }}
+            />
+            <span
+              className="text-[11px] font-bold tracking-wider uppercase"
+              style={{ color: "#22C55E" }}
+            >
+              Challenged
+            </span>
+          </div>
+          {timer && (
+            <div className="flex items-center gap-1">
+              {timer.urgent && (
+                <span
+                  className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded"
+                  style={{ backgroundColor: "#FEE2E2", color: "#EF4444" }}
+                >
+                  URGENT
+                </span>
+              )}
+              <span
+                className="text-[11px] font-medium"
+                style={{ color: timer.color }}
+              >
+                {timer.text}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Row 2: Submitter avatar + handle + time */}
+        <div className="flex items-center gap-2 mb-3">
+          {handle && !avatarFailed ? (
+            <img
+              src={`https://unavatar.io/x/${handle}`}
+              alt=""
+              className="w-6 h-6 rounded-full object-cover flex-shrink-0"
+              loading="lazy"
+              onError={() => setAvatarFailed(true)}
+            />
+          ) : (
+            <div
+              className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-[9px] font-bold"
+              style={{
+                backgroundColor: categoryColor(item.category ?? "") + "18",
+                color: categoryColor(item.category ?? ""),
+              }}
+            >
+              {item.category?.slice(0, 2).toUpperCase() || "??"}
+            </div>
+          )}
+          <span className="text-[12px]" style={{ color: "#A8A29E" }}>
+            {handle ? `@${handle}` : item.submitter.slice(0, 8)}
+            {challengedAgo ? ` · ${challengedAgo} ago` : ""}
           </span>
         </div>
 
-        {/* Title */}
+        {/* Row 3: Title */}
         <h2
           className="text-[16px] font-semibold leading-[22px] mb-2"
           style={{ color: "#1A1A1A" }}
@@ -158,43 +191,53 @@ export function SwipeCard({ item, estimatedReward, onVote }: SwipeCardProps) {
           {item.title}
         </h2>
 
-        {/* Description */}
+        {/* Row 4: Description */}
         <p
           className="text-[13px] leading-[19px] mb-4"
           style={{ color: "#6B6B6B" }}
         >
           {item.description}
         </p>
-
-        {/* Source + submitter */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#A8A29E" strokeWidth="2">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-              <polyline points="15 3 21 3 21 9" />
-              <line x1="10" y1="14" x2="21" y2="3" />
-            </svg>
-            <span className="text-[11px]" style={{ color: "#A8A29E" }}>
-              x.com
-            </span>
-          </div>
-          <span className="text-[11px]" style={{ color: "#A8A29E" }}>
-            by {item.submitter}
-          </span>
-        </div>
       </div>
 
-      {/* Earnings bar */}
+      {/* 3-column footer: BONDED / VOTES / EARN UP TO */}
       <div
-        className="flex items-center justify-between px-5 py-3"
+        className="grid grid-cols-3 px-5 py-3"
         style={{ borderTop: "1px solid #F0EDE8", backgroundColor: "#FAFAF8" }}
       >
-        <span className="text-[12px]" style={{ color: "#A8A29E" }}>
-          Earn for voting correctly
-        </span>
-        <span className="text-[13px] font-bold" style={{ color: "#10B981" }}>
-          ~${estimatedReward}
-        </span>
+        <div>
+          <p
+            className="text-[10px] font-medium tracking-wider uppercase mb-0.5"
+            style={{ color: "#A8A29E" }}
+          >
+            BONDED
+          </p>
+          <p className="text-[15px] font-bold" style={{ color: "#1A1A1A" }}>
+            {bondDisplay}
+          </p>
+        </div>
+        <div className="text-center">
+          <p
+            className="text-[10px] font-medium tracking-wider uppercase mb-0.5"
+            style={{ color: "#A8A29E" }}
+          >
+            VOTES
+          </p>
+          <p className="text-[15px] font-bold" style={{ color: "#1A1A1A" }}>
+            {totalVoteCount} vote{totalVoteCount !== 1 ? "s" : ""}
+          </p>
+        </div>
+        <div className="text-right">
+          <p
+            className="text-[10px] font-medium tracking-wider uppercase mb-0.5"
+            style={{ color: "#A8A29E" }}
+          >
+            EARN UP TO
+          </p>
+          <p className="text-[15px] font-bold" style={{ color: "#10B981" }}>
+            ~${estimatedReward}
+          </p>
+        </div>
       </div>
     </div>
   );

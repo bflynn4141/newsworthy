@@ -12,7 +12,7 @@ const EVENTS = {
     'event ItemChallenged(uint256 indexed itemId, address indexed challenger)'
   ),
   VoteCast: parseAbiItem(
-    'event VoteCast(uint256 indexed itemId, address indexed voter, bool support)'
+    'event VoteCast(uint256 indexed itemId, uint256 indexed humanId, bool support)'
   ),
   ItemResolved: parseAbiItem(
     'event ItemResolved(uint256 indexed itemId, uint8 status)'
@@ -192,9 +192,9 @@ export async function syncEvents(
 
   // Process VoteCast — update vote counts
   for (const log of voteLogs) {
-    const { itemId, voter, support } = log.args as {
+    const { itemId, support } = log.args as {
       itemId: bigint
-      voter: string
+      humanId: bigint
       support: boolean
     }
 
@@ -210,7 +210,9 @@ export async function syncEvents(
         .run()
     }
 
-    await upsertAgentScore(db, voter.toLowerCase(), { votes: 1 })
+    // Note: VoteCast emits humanId (uint256), not voter address.
+    // Agent score tracking for votes requires an AgentBook reverse lookup,
+    // which is not worth the extra RPC call per vote. Skip for now.
     eventsProcessed++
   }
 
