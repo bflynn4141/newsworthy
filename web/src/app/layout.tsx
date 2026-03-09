@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, DM_Serif_Display } from "next/font/google";
 import "./globals.css";
+import { MiniKitSetup } from "@/components/mini/minikit-provider";
 
 const geist = Geist({
   variable: "--font-geist-sans",
@@ -26,7 +27,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${geist.variable} ${dmSerif.variable} font-sans antialiased`}>
-        {children}
+        <MiniKitSetup>{children}</MiniKitSetup>
       </body>
     </html>
   );

@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { MiniKit } from "@worldcoin/minikit-js";
 import { BottomNav } from "./bottom-nav";
-import { shortenAddress } from "@/lib/utils";
+import { shortenAddress, timeAgo } from "@/lib/utils";
 
 interface VoteHistory {
   itemId: number;
@@ -11,6 +11,7 @@ interface VoteHistory {
   vote: "keep" | "remove";
   outcome: "won" | "lost" | "pending";
   earned: number;
+  votedAt?: number;
 }
 
 interface ProfileData {
@@ -89,6 +90,7 @@ export function ProfileView() {
       vote: h.vote,
       outcome: h.outcome,
       earned: Number.isFinite(raw) ? raw : 0,
+      votedAt: (h as Record<string, unknown>).votedAt as number | undefined,
     };
   });
 
@@ -164,11 +166,26 @@ export function ProfileView() {
 
   return (
     <div className="pb-20">
-      {/* Header */}
-      <div className="px-4 pt-14 pb-3">
+      {/* Header with Verified Human badge */}
+      <div className="px-4 pt-14 pb-3 flex items-baseline justify-between">
         <h1 className="text-lg font-bold" style={{ color: "#1A1A1A" }}>
           Profile
         </h1>
+        {walletAddress ? (
+          <div className="flex items-center gap-1.5">
+            <div
+              className="w-2 h-2 rounded-full"
+              style={{ backgroundColor: "#22C55E" }}
+            />
+            <span className="text-[12px] font-medium" style={{ color: "#22C55E" }}>
+              Verified Human
+            </span>
+          </div>
+        ) : (
+          <span className="text-[12px]" style={{ color: "#A8A29E" }}>
+            Open in World App to connect
+          </span>
+        )}
       </div>
 
       {/* Profile card */}
@@ -180,43 +197,10 @@ export function ProfileView() {
             border: "1px solid #F0EDE8",
           }}
         >
-          {/* Avatar + address + verified badge */}
-          <div className="flex items-center gap-3 mb-5">
-            <div
-              className="w-11 h-11 rounded-full flex items-center justify-center"
-              style={{ backgroundColor: "#F0EDE8" }}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="8" r="4" fill="#A8A29E" />
-                <path d="M4 20c0-3.3 2.7-6 6-6h4c3.3 0 6 2.7 6 6" fill="#A8A29E" />
-              </svg>
-            </div>
-            <div className="flex-1">
-              <p className="text-[14px] font-semibold" style={{ color: "#1A1A1A" }}>
-                {shortAddress}
-              </p>
-              {walletAddress ? (
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <div
-                    className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: "#22C55E" }}
-                  />
-                  <p className="text-[11px] font-medium" style={{ color: "#22C55E" }}>
-                    Verified Human
-                  </p>
-                </div>
-              ) : (
-                <p className="text-[11px] mt-0.5" style={{ color: "#A8A29E" }}>
-                  Open in World App to connect
-                </p>
-              )}
-            </div>
-          </div>
-
           {/* Earnings hero */}
           <div className="text-center mb-5">
             <p className="text-[11px] font-medium tracking-wider" style={{ color: "#A8A29E" }}>
-              TOTAL EARNED
+              TOTAL EARNINGS
             </p>
             <p
               className="text-[36px] font-extrabold leading-tight"
@@ -253,7 +237,7 @@ export function ProfileView() {
                 {totalVotes}
               </p>
               <p className="text-[10px]" style={{ color: "#A8A29E" }}>
-                Votes
+                Total Votes
               </p>
             </div>
             <div
@@ -264,7 +248,7 @@ export function ProfileView() {
                 {streak}
               </p>
               <p className="text-[10px]" style={{ color: "#A8A29E" }}>
-                Streak
+                Day Streak
               </p>
             </div>
           </div>
@@ -273,9 +257,16 @@ export function ProfileView() {
 
       {/* Vote history */}
       <div className="px-4">
-        <h2 className="text-[14px] font-semibold mb-3" style={{ color: "#1A1A1A" }}>
-          Vote History
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-[14px] font-semibold" style={{ color: "#1A1A1A" }}>
+            Vote History
+          </h2>
+          {hasVoted && (
+            <button className="text-[12px] font-medium" style={{ color: "#A8A29E" }}>
+              See all
+            </button>
+          )}
+        </div>
 
         {!hasVoted ? (
           <div
@@ -290,21 +281,26 @@ export function ProfileView() {
               style={{ backgroundColor: "#F0EDE8" }}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A8A29E" strokeWidth="1.5">
-                <path d="M12 2L4 6v5c0 5.25 3.4 10.15 8 11.4 4.6-1.25 8-6.15 8-11.4V6l-8-4z" />
-                <path d="M9 12l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />
+                <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26" />
               </svg>
             </div>
             <p className="text-[14px] font-semibold" style={{ color: "#1A1A1A" }}>
               No votes yet
             </p>
-            <p className="text-[12px] mt-1 mb-4" style={{ color: "#A8A29E" }}>
-              Start curating to earn USDC
+            <p className="text-[12px] mt-1 mb-4 max-w-[220px] mx-auto" style={{ color: "#A8A29E" }}>
+              Vote on challenged items to earn USDC and build your reputation.
             </p>
             <a
-              href="/mini/curate"
-              className="inline-block px-5 py-2.5 rounded-xl text-[13px] font-semibold text-white"
+              href="/curate"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-semibold text-white"
               style={{ backgroundColor: "#1A1A1A" }}
             >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <rect x="3" y="3" width="8" height="8" rx="2" fill="white" />
+                <rect x="13" y="3" width="8" height="8" rx="2" fill="white" />
+                <rect x="3" y="13" width="8" height="8" rx="2" fill="white" />
+                <rect x="13" y="13" width="8" height="8" rx="2" fill="white" />
+              </svg>
               Start curating
             </a>
           </div>
@@ -354,13 +350,17 @@ export function ProfileView() {
                   )}
                 </div>
 
-                {/* Title */}
+                {/* Title + vote direction */}
                 <div className="flex-1 min-w-0">
                   <p
                     className="text-[13px] font-medium truncate"
                     style={{ color: "#1A1A1A" }}
                   >
                     {vote.title}
+                  </p>
+                  <p className="text-[11px] mt-0.5" style={{ color: "#A8A29E" }}>
+                    Voted {vote.vote === "keep" ? "Keep" : "Remove"}
+                    {vote.votedAt ? ` · ${timeAgo(vote.votedAt)}` : ""}
                   </p>
                 </div>
 
