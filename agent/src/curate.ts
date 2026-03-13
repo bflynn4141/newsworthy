@@ -1,14 +1,13 @@
-// Main curation pipeline
+// Main curation pipeline (V2 — no challenge step)
 //
 // Lifecycle of a news item:
 //   1. Agent discovers URLs          (sources.ts)
 //   2. Agent evaluates each URL      (evaluate.ts)
 //   3. Worthy items → submitItem()   (this file)
-//   4. Other agents can challenge    → challengeItem()
-//   5. Registered agents vote        → voteOnChallenge()
-//   6. After voting period           → resolveChallenge() or resolveNoQuorum()
-//   7. Unchallenged items auto-pass  → acceptItem()
-//   8. Winners withdraw rewards      → withdraw()
+//   4. Registered humans vote        → vote(itemId, support)
+//   5. After voting period           → resolve(itemId)
+//   6. Voters claim rewards          → claim(itemId)
+//   7. Bond holders withdraw         → withdraw()
 //
 // All functions require the caller to be registered in AgentBook (enforced on-chain).
 
@@ -22,9 +21,9 @@ import {
 } from 'viem'
 import { worldchain } from 'viem/chains'
 
-// ── FeedRegistry ABI ─────────────────────────────────────────────────────────
-// Matches the spec in task #1 — submitItem, challengeItem, voteOnChallenge,
-// resolveChallenge, resolveNoQuorum, acceptItem, withdraw, plus events.
+// ── FeedRegistry V2 ABI ──────────────────────────────────────────────────────
+// V2 eliminates the challenge step. Items go directly to voting.
+// Status enum: 0=Voting, 1=Accepted, 2=Rejected
 
 export const FEED_REGISTRY_ABI = [
   // ── Errors ───────────────────────────────────────────────────────────────
@@ -32,15 +31,12 @@ export const FEED_REGISTRY_ABI = [
   { type: 'error', name: 'DuplicateUrl', inputs: [] },
   { type: 'error', name: 'InvalidItemStatus', inputs: [] },
   { type: 'error', name: 'InvalidUrl', inputs: [] },
-  { type: 'error', name: 'InsufficientBond', inputs: [] },
-  { type: 'error', name: 'SelfChallenge', inputs: [] },
+  { type: 'error', name: 'SelfVote', inputs: [] },
   { type: 'error', name: 'AlreadyVoted', inputs: [] },
-  { type: 'error', name: 'ChallengePeriodActive', inputs: [] },
-  { type: 'error', name: 'ChallengePeriodExpired', inputs: [] },
   { type: 'error', name: 'VotingPeriodActive', inputs: [] },
   { type: 'error', name: 'VotingPeriodExpired', inputs: [] },
-  { type: 'error', name: 'QuorumNotMet', inputs: [] },
-  { type: 'error', name: 'QuorumMet', inputs: [] },
+  { type: 'error', name: 'NotAVoter', inputs: [] },
+  { type: 'error', name: 'AlreadyClaimed', inputs: [] },
   { type: 'error', name: 'NothingToWithdraw', inputs: [] },
   { type: 'error', name: 'TransferFailed', inputs: [] },
   { type: 'error', name: 'DailyLimitReached', inputs: [] },
@@ -58,14 +54,7 @@ export const FEED_REGISTRY_ABI = [
   },
   {
     type: 'function',
-    name: 'challengeItem',
-    inputs: [{ name: 'itemId', type: 'uint256' }],
-    outputs: [],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'function',
-    name: 'voteOnChallenge',
+    name: 'vote',
     inputs: [
       { name: 'itemId', type: 'uint256' },
       { name: 'support', type: 'bool' },
@@ -75,21 +64,14 @@ export const FEED_REGISTRY_ABI = [
   },
   {
     type: 'function',
-    name: 'resolveChallenge',
+    name: 'resolve',
     inputs: [{ name: 'itemId', type: 'uint256' }],
     outputs: [],
     stateMutability: 'nonpayable',
   },
   {
     type: 'function',
-    name: 'resolveNoQuorum',
-    inputs: [{ name: 'itemId', type: 'uint256' }],
-    outputs: [],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'function',
-    name: 'acceptItem',
+    name: 'claim',
     inputs: [{ name: 'itemId', type: 'uint256' }],
     outputs: [],
     stateMutability: 'nonpayable',
@@ -123,9 +105,11 @@ export const FEED_REGISTRY_ABI = [
     inputs: [{ name: 'itemId', type: 'uint256' }],
     outputs: [
       { name: 'submitter', type: 'address' },
+      { name: 'submitterHumanId', type: 'uint256' },
       { name: 'url', type: 'string' },
       { name: 'metadataHash', type: 'string' },
       { name: 'bond', type: 'uint256' },
+      { name: 'voteCostSnapshot', type: 'uint256' },
       { name: 'submittedAt', type: 'uint256' },
       { name: 'status', type: 'uint8' },
     ],
@@ -142,13 +126,6 @@ export const FEED_REGISTRY_ABI = [
     type: 'function',
     name: 'pendingWithdrawals',
     inputs: [{ name: 'account', type: 'address' }],
-    outputs: [{ name: '', type: 'uint256' }],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'challengePeriod',
-    inputs: [],
     outputs: [{ name: '', type: 'uint256' }],
     stateMutability: 'view',
   },
@@ -199,15 +176,38 @@ export const FEED_REGISTRY_ABI = [
   },
   {
     type: 'function',
-    name: 'challenges',
+    name: 'owner',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'hasVotedByHuman',
+    inputs: [
+      { name: 'itemId', type: 'uint256' },
+      { name: 'humanId', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getVoteSession',
     inputs: [{ name: 'itemId', type: 'uint256' }],
     outputs: [
-      { name: 'challenger', type: 'address' },
-      { name: 'bond', type: 'uint256' },
-      { name: 'challengedAt', type: 'uint256' },
       { name: 'votesFor', type: 'uint256' },
       { name: 'votesAgainst', type: 'uint256' },
+      { name: 'keepClaimPerVoter', type: 'uint256' },
+      { name: 'removeClaimPerVoter', type: 'uint256' },
     ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'voteCost',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
     stateMutability: 'view',
   },
 
@@ -219,14 +219,6 @@ export const FEED_REGISTRY_ABI = [
       { name: 'itemId', type: 'uint256', indexed: true },
       { name: 'submitter', type: 'address', indexed: true },
       { name: 'url', type: 'string', indexed: false },
-    ],
-  },
-  {
-    type: 'event',
-    name: 'ItemChallenged',
-    inputs: [
-      { name: 'itemId', type: 'uint256', indexed: true },
-      { name: 'challenger', type: 'address', indexed: true },
     ],
   },
   {
@@ -248,9 +240,11 @@ export const FEED_REGISTRY_ABI = [
   },
   {
     type: 'event',
-    name: 'ItemAccepted',
+    name: 'VoterClaimed',
     inputs: [
       { name: 'itemId', type: 'uint256', indexed: true },
+      { name: 'voter', type: 'address', indexed: true },
+      { name: 'payout', type: 'uint256', indexed: false },
     ],
   },
   {
@@ -347,30 +341,9 @@ export async function submitItem(
   })
 }
 
-// ── Challenge ────────────────────────────────────────────────────────────────
-
-export async function challengeItem(
-  registryAddress: Address,
-  itemId: bigint,
-  account: Account,
-): Promise<Hash> {
-  const walletClient = createWalletClient({
-    chain: worldchain,
-    transport: http(),
-    account,
-  })
-
-  return walletClient.writeContract({
-    address: registryAddress,
-    abi: FEED_REGISTRY_ABI,
-    functionName: 'challengeItem',
-    args: [itemId],
-  })
-}
-
 // ── Vote ─────────────────────────────────────────────────────────────────────
 
-export async function voteOnChallenge(
+export async function vote(
   registryAddress: Address,
   itemId: bigint,
   support: boolean,
@@ -385,14 +358,14 @@ export async function voteOnChallenge(
   return walletClient.writeContract({
     address: registryAddress,
     abi: FEED_REGISTRY_ABI,
-    functionName: 'voteOnChallenge',
+    functionName: 'vote',
     args: [itemId, support],
   })
 }
 
 // ── Resolve ──────────────────────────────────────────────────────────────────
 
-export async function resolveChallenge(
+export async function resolve(
   registryAddress: Address,
   itemId: bigint,
   account: Account,
@@ -406,12 +379,14 @@ export async function resolveChallenge(
   return walletClient.writeContract({
     address: registryAddress,
     abi: FEED_REGISTRY_ABI,
-    functionName: 'resolveChallenge',
+    functionName: 'resolve',
     args: [itemId],
   })
 }
 
-export async function resolveNoQuorum(
+// ── Claim ────────────────────────────────────────────────────────────────────
+
+export async function claim(
   registryAddress: Address,
   itemId: bigint,
   account: Account,
@@ -425,26 +400,7 @@ export async function resolveNoQuorum(
   return walletClient.writeContract({
     address: registryAddress,
     abi: FEED_REGISTRY_ABI,
-    functionName: 'resolveNoQuorum',
-    args: [itemId],
-  })
-}
-
-export async function acceptItem(
-  registryAddress: Address,
-  itemId: bigint,
-  account: Account,
-): Promise<Hash> {
-  const walletClient = createWalletClient({
-    chain: worldchain,
-    transport: http(),
-    account,
-  })
-
-  return walletClient.writeContract({
-    address: registryAddress,
-    abi: FEED_REGISTRY_ABI,
-    functionName: 'acceptItem',
+    functionName: 'claim',
     args: [itemId],
   })
 }

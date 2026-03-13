@@ -315,8 +315,8 @@ export function computeSubmitterScore(
   const theirs = allItems.filter(i =>
     i.submitter.toLowerCase() === submitter.toLowerCase()
   )
-  const accepted = theirs.filter(i => i.status === 2).length
-  const rejected = theirs.filter(i => i.status === 3).length
+  const accepted = theirs.filter(i => i.status === 1).length
+  const rejected = theirs.filter(i => i.status === 2).length
   const total = accepted + rejected
 
   if (total === 0) return 3.0 // unproven — must earn credibility

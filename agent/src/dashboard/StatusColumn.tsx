@@ -4,15 +4,13 @@ import type { FeedItem, ItemStatus } from './useFeedData.js'
 import ItemCard from './ItemCard.js'
 
 const HEADERS: Record<ItemStatus, { icon: string; color: string; label: string }> = {
-  pending:    { icon: '\u23F3', color: 'yellow',    label: 'PENDING' },
-  challenged: { icon: '\u2694',  color: 'red',       label: 'CHALLENGED' },
+  pending:    { icon: '\u23F3', color: 'yellow',    label: 'VOTING' },
   accepted:  { icon: '\u2713',  color: 'green',     label: 'ACCEPTED' },
   rejected:  { icon: '\u2717',  color: 'gray',      label: 'REJECTED' },
 }
 
 const EMPTY_MESSAGES: Record<ItemStatus, string[]> = {
   pending:    ['No items yet.', "Use 'submit' to", 'add the first.'],
-  challenged: ['No challenges.'],
   accepted:  ['No accepted', 'items yet.'],
   rejected:  ['No rejected', 'items.'],
 }

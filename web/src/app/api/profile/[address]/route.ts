@@ -17,8 +17,6 @@ function extractHandle(url: string): string | null {
   return match ? match[1] : null;
 }
 
-const VOTER_SHARE_BPS = BigInt(3000); // 30% — matches contract constant
-
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ address: string }> }
@@ -107,7 +105,7 @@ export async function GET(
       });
     }
 
-    // ── Multicall B: read item + challenge data for each vote ────
+    // ── Multicall B: read item + vote session data for each vote ────
     const votedItemIds = logs.map((log) => log.args.itemId!);
 
     const itemCalls = votedItemIds.map((itemId) => ({
@@ -117,23 +115,22 @@ export async function GET(
       args: [itemId] as const,
     }));
 
-    const challengeCalls = votedItemIds.map((itemId) => ({
+    const voteSessionCalls = votedItemIds.map((itemId) => ({
       address: REGISTRY_ADDRESS as `0x${string}`,
       abi: registryAbi,
-      functionName: "challenges" as const,
+      functionName: "getVoteSession" as const,
       args: [itemId] as const,
     }));
 
-    const [itemResults, challengeResults] = await Promise.all([
+    const [itemResults, voteSessionResults] = await Promise.all([
       client.multicall({ contracts: itemCalls, allowFailure: true }),
-      client.multicall({ contracts: challengeCalls, allowFailure: true }),
+      client.multicall({ contracts: voteSessionCalls, allowFailure: true }),
     ]);
 
     // ── Compute per-vote outcomes ────────────────────────────────
     let won = 0;
     let lost = 0;
     let pending = 0;
-    let totalEarnedBig = BigInt(0);
 
     interface HistoryEntry {
       itemId: number;
@@ -150,40 +147,34 @@ export async function GET(
       const log = logs[i];
       const support = log.args.support!; // true = keep, false = remove
       const itemRes = itemResults[i];
-      const chalRes = challengeResults[i];
+      const sessionRes = voteSessionResults[i];
 
-      if (itemRes.status !== "success" || chalRes.status !== "success") {
+      if (itemRes.status !== "success" || sessionRes.status !== "success") {
         continue;
       }
 
-      const [, url, , itemBond, , statusRaw] = itemRes.result;
-      const [, challengeBond, , votesFor, votesAgainst] = chalRes.result;
+      const [, , url, , , , , statusRaw] = itemRes.result;
+      const [votesFor, votesAgainst, keepClaimPerVoter, removeClaimPerVoter] = sessionRes.result;
       const status = Number(statusRaw);
 
       let outcome: "won" | "lost" | "pending";
       let earnedBig = BigInt(0);
 
-      if (status === 2) {
+      if (status === 1) {
         // Accepted — keepVoters won
         outcome = support ? "won" : "lost";
-      } else if (status === 3) {
+      } else if (status === 2) {
         // Rejected — removeVoters won
         outcome = support ? "lost" : "won";
       } else {
-        // Still Challenged (1) or Pending (0) — shouldn't have votes but handle gracefully
+        // Still Voting (0) — not resolved yet
         outcome = "pending";
       }
 
       if (outcome === "won") {
         won++;
-        // Earnings: voterPool / winningVoterCount (integer division, matching contract)
-        const totalPool = itemBond + challengeBond;
-        const voterPool = (totalPool * VOTER_SHARE_BPS) / BigInt(10000);
-        const winningVoterCount = status === 2 ? votesFor : votesAgainst;
-        if (winningVoterCount > BigInt(0)) {
-          earnedBig = voterPool / winningVoterCount;
-          totalEarnedBig += earnedBig;
-        }
+        // Use claim-per-voter from the contract for accurate earnings
+        earnedBig = support ? keepClaimPerVoter : removeClaimPerVoter;
       } else if (outcome === "lost") {
         lost++;
       } else {
@@ -207,11 +198,12 @@ export async function GET(
     const resolved = won + lost;
     const accuracy = resolved > 0 ? Math.round((won / resolved) * 100) : 0;
 
+    // For earnings: use pendingWithdrawals as total (includes all claimable amounts)
     return NextResponse.json({
       address,
       humanId: humanId.toString(),
       earnings: {
-        total: formatUnits(totalEarnedBig, 6),
+        total: formatUnits(pendingRaw, 6),
         pending: formatUnits(pendingRaw, 6),
       },
       accuracy,

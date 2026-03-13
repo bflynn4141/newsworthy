@@ -16,7 +16,7 @@ interface SwipeCardProps {
     votingEndsAt?: number;
     votesFor?: number;
     votesAgainst?: number;
-    challengedAt?: number;
+    submittedAt?: number;
   };
   estimatedReward: string;
   onVote: (direction: "keep" | "remove") => void;
@@ -69,7 +69,7 @@ export function SwipeCard({ item, estimatedReward, onVote, onDrag }: SwipeCardPr
   const parsedBond = item.bond ? parseFloat(item.bond) : NaN;
   const bondDisplay = Number.isFinite(parsedBond) ? `${parsedBond} USDC` : "1 USDC";
   const totalVoteCount = (item.votesFor ?? 0) + (item.votesAgainst ?? 0);
-  const challengedAgo = item.challengedAt ? timeAgo(item.challengedAt) : null;
+  const submittedAgo = item.submittedAt ? timeAgo(item.submittedAt) : null;
 
   return (
     <div
@@ -122,18 +122,18 @@ export function SwipeCard({ item, estimatedReward, onVote, onDrag }: SwipeCardPr
 
       {/* Card content */}
       <div className="p-5">
-        {/* Row 1: CHALLENGED badge + timer */}
+        {/* Row 1: VOTING badge + timer */}
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-1.5">
             <div
               className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: "#F97316" }}
+              style={{ backgroundColor: "#3B82F6" }}
             />
             <span
               className="text-[11px] font-bold tracking-wider uppercase"
-              style={{ color: "#22C55E" }}
+              style={{ color: "#3B82F6" }}
             >
-              Challenged
+              Voting
             </span>
           </div>
           {timer && (
@@ -179,7 +179,7 @@ export function SwipeCard({ item, estimatedReward, onVote, onDrag }: SwipeCardPr
           )}
           <span className="text-[12px]" style={{ color: "#A8A29E" }}>
             {handle ? `@${handle}` : item.submitter.slice(0, 8)}
-            {challengedAgo ? ` · ${challengedAgo} ago` : ""}
+            {submittedAgo ? ` · ${submittedAgo} ago` : ""}
           </span>
         </div>
 

@@ -1,13 +1,12 @@
-// Curator Agent — autonomous curation loop for FeedRegistry
+// Curator Agent — autonomous curation loop for FeedRegistryV2
 //
 // Watches the registry, analyzes new submissions, and takes action:
-//   - Challenges low-quality items (bonds USDC)
-//   - Votes on active challenges (keep/remove based on analysis)
-//   - Accepts unchallenged items past their grace period
-//   - Resolves finished challenges (quorum or no-quorum)
+//   - Votes on pending items (keep/remove based on analysis, costs voteCost USDC)
+//   - Resolves expired voting periods
+//   - Claims payouts after resolution
 //
 // Usage:
-//   bun run agent/src/curator.ts [--test] [--dry-run] [--challenge-threshold 4.0]
+//   bun run agent/src/curator.ts [--test] [--dry-run] [--vote-threshold 5.0]
 //
 // The agent needs:
 //   - A funded wallet (.secrets/deployer.key)
@@ -49,7 +48,7 @@ type Deployment = {
 
 type RegistryConfig = {
   bondAmount: bigint
-  challengePeriod: bigint
+  voteCost: bigint
   votingPeriod: bigint
   minVotes: bigint
   bondToken: Address
@@ -60,10 +59,9 @@ type RegistryConfig = {
 }
 
 export type CuratorConfig = {
-  challengeThreshold: number  // challenge items scoring below this (default: 4.0)
   voteThreshold: number       // vote REMOVE if below, KEEP if above (default: 5.0)
-  autoAccept: boolean         // accept expired unchallenged items (default: true)
-  autoResolve: boolean        // resolve expired challenges (default: true)
+  autoResolve: boolean        // resolve expired voting periods (default: true)
+  autoClaim: boolean          // claim payouts after resolution (default: true)
   dryRun: boolean             // log decisions without sending transactions
   pollIntervalMs: number      // how often to scan (default: 30000)
 }
@@ -78,10 +76,9 @@ type ActionLog = {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const STATUS_PENDING = 0
-const STATUS_CHALLENGED = 1
-const STATUS_ACCEPTED = 2
-const STATUS_REJECTED = 3
+const STATUS_VOTING = 0
+const STATUS_ACCEPTED = 1
+const STATUS_REJECTED = 2
 
 const BOLD = '\x1b[1m'
 const DIM = '\x1b[90m'
@@ -121,9 +118,9 @@ async function loadPrivateKey(): Promise<`0x${string}`> {
 // ── Registry Reader ────────────────────────────────────────────────────────
 
 async function fetchConfig(client: PublicClient, registry: Address): Promise<RegistryConfig> {
-  const [bondAmount, challengePeriod, votingPeriod, minVotes, bondToken, newsPerItem, maxDailySubmissions] = await Promise.all([
+  const [bondAmount, voteCost, votingPeriod, minVotes, bondToken, newsPerItem, maxDailySubmissions] = await Promise.all([
     client.readContract({ address: registry, abi: FEED_REGISTRY_ABI, functionName: 'bondAmount' }) as Promise<bigint>,
-    client.readContract({ address: registry, abi: FEED_REGISTRY_ABI, functionName: 'challengePeriod' }) as Promise<bigint>,
+    client.readContract({ address: registry, abi: FEED_REGISTRY_ABI, functionName: 'voteCost' }) as Promise<bigint>,
     client.readContract({ address: registry, abi: FEED_REGISTRY_ABI, functionName: 'votingPeriod' }) as Promise<bigint>,
     client.readContract({ address: registry, abi: FEED_REGISTRY_ABI, functionName: 'minVotes' }) as Promise<bigint>,
     client.readContract({ address: registry, abi: FEED_REGISTRY_ABI, functionName: 'bondToken' }) as Promise<Address>,
@@ -136,7 +133,7 @@ async function fetchConfig(client: PublicClient, registry: Address): Promise<Reg
     client.readContract({ address: bondToken, abi: ERC20_ABI, functionName: 'decimals' }) as Promise<number>,
   ])
 
-  return { bondAmount, challengePeriod, votingPeriod, minVotes, bondToken, tokenSymbol, tokenDecimals, newsPerItem, maxDailySubmissions }
+  return { bondAmount, voteCost, votingPeriod, minVotes, bondToken, tokenSymbol, tokenDecimals, newsPerItem, maxDailySubmissions }
 }
 
 async function fetchAllItems(
@@ -150,32 +147,31 @@ async function fetchAllItems(
 
   const count = Number(nextId)
   const nowSec = BigInt(Math.floor(Date.now() / 1000))
-  const items: FeedItem[] = []
 
   const promises = Array.from({ length: count }, async (_, i) => {
     const raw = await client.readContract({
       address: registry, abi: FEED_REGISTRY_ABI, functionName: 'items', args: [BigInt(i)],
-    }) as [Address, string, string, bigint, bigint, number]
+    }) as [Address, bigint, string, string, bigint, bigint, bigint, number]
 
-    const [submitter, url, metadataHash, bond, submittedAt, status] = raw
+    const [submitter, submitterHumanId, url, metadataHash, bond, voteCostSnapshot, submittedAt, status] = raw
 
     let timeRemaining = -1
-    if (status === STATUS_PENDING) {
-      const end = submittedAt + config.challengePeriod
+    if (status === STATUS_VOTING) {
+      const end = submittedAt + config.votingPeriod
       timeRemaining = Math.max(0, Number(end - nowSec))
     }
 
-    const item: FeedItem = { id: i, submitter, url, metadataHash, bond, submittedAt, status, timeRemaining }
+    const item: FeedItem = {
+      id: i, submitter, submitterHumanId, url, metadataHash, bond, voteCostSnapshot, submittedAt, status, timeRemaining,
+    }
 
-    if (status === STATUS_CHALLENGED) {
-      const cRaw = await client.readContract({
-        address: registry, abi: FEED_REGISTRY_ABI, functionName: 'challenges', args: [BigInt(i)],
-      }) as [Address, bigint, bigint, bigint, bigint]
-      const [challenger, cBond, challengedAt, votesFor, votesAgainst] = cRaw
-      item.challenge = {
-        challenger, bond: cBond, challengedAt, votesFor, votesAgainst,
-        timeRemaining: Math.max(0, Number(challengedAt + config.votingPeriod - nowSec)),
-      }
+    // Fetch vote session for voting items
+    if (status === STATUS_VOTING) {
+      const vRaw = await client.readContract({
+        address: registry, abi: FEED_REGISTRY_ABI, functionName: 'getVoteSession', args: [BigInt(i)],
+      }) as [bigint, bigint, bigint, bigint]
+      const [votesFor, votesAgainst, keepClaimPerVoter, removeClaimPerVoter] = vRaw
+      item.voteSession = { votesFor, votesAgainst, keepClaimPerVoter, removeClaimPerVoter }
     }
 
     return item
@@ -208,7 +204,6 @@ export async function runCuratorLoop(
   logInfo(`Agent address: ${agentAddr}`)
   logInfo(`Registry: ${registryAddr}`)
   logInfo(`Mode: ${curatorConfig.dryRun ? `${YELLOW}DRY RUN${RESET}` : `${GREEN}LIVE${RESET}`}`)
-  logInfo(`Challenge threshold: ${curatorConfig.challengeThreshold}`)
   logInfo(`Vote threshold: ${curatorConfig.voteThreshold}`)
   logInfo(`Poll interval: ${curatorConfig.pollIntervalMs / 1000}s`)
 
@@ -245,7 +240,7 @@ export async function runCuratorLoop(
   logInfo(`ETH balance: ${formatEther(ethBalance)} (for gas)`)
   logInfo(`${registryConfig.tokenSymbol} balance: ${fmt(tokenBalance)}`)
   logInfo(`Bond token: ${registryConfig.tokenSymbol} @ ${registryConfig.bondToken}`)
-  logInfo(`Bond: ${fmt(registryConfig.bondAmount)} ${registryConfig.tokenSymbol} | Challenge: ${registryConfig.challengePeriod}s | Voting: ${registryConfig.votingPeriod}s | MinVotes: ${registryConfig.minVotes}`)
+  logInfo(`Bond: ${fmt(registryConfig.bondAmount)} ${registryConfig.tokenSymbol} | Vote cost: ${fmt(registryConfig.voteCost)} ${registryConfig.tokenSymbol} | Voting: ${registryConfig.votingPeriod}s | MinVotes: ${registryConfig.minVotes}`)
 
   // Ensure USDC approval for registry (approve max once)
   const allowance = await client.readContract({
@@ -253,7 +248,7 @@ export async function runCuratorLoop(
     args: [agentAddr, registryAddr],
   }) as bigint
 
-  if (allowance < registryConfig.bondAmount * 100n) {
+  if (allowance < registryConfig.voteCost * 1000n) {
     logInfo(`Approving ${registryConfig.tokenSymbol} for registry...`)
     if (!curatorConfig.dryRun) {
       const approveHash = await walletClient.writeContract({
@@ -275,8 +270,8 @@ export async function runCuratorLoop(
   // Track what we've already processed to avoid double-actions
   const processedItems = new Set<number>()
   const votedItems = new Set<number>()
-  const acceptedItems = new Set<number>()
   const resolvedItems = new Set<number>()
+  const claimedItems = new Set<number>()
   const actionLog: ActionLog[] = []
 
   function recordAction(action: string, itemId: number, reason: string, txHash?: string) {
@@ -291,39 +286,61 @@ export async function runCuratorLoop(
 
       for (const item of items) {
         // Skip terminal states
-        if (item.status === STATUS_ACCEPTED || item.status === STATUS_REJECTED) continue
-
-        // ── PENDING items ──────────────────────────────────────────
-        if (item.status === STATUS_PENDING) {
-          const challengeEnd = Number(item.submittedAt) + Number(registryConfig.challengePeriod)
-          const expired = nowSec > challengeEnd
-
-          // Accept expired items
-          if (expired && curatorConfig.autoAccept && !acceptedItems.has(item.id)) {
-            acceptedItems.add(item.id)
-            logAction(`#${item.id} challenge period expired — accepting`)
+        if (item.status === STATUS_ACCEPTED || item.status === STATUS_REJECTED) {
+          // Claim payouts for resolved items we voted on
+          if (curatorConfig.autoClaim && votedItems.has(item.id) && !claimedItems.has(item.id)) {
+            claimedItems.add(item.id)
+            logAction(`#${item.id} resolved — claiming payout`)
             if (!curatorConfig.dryRun) {
               try {
                 const hash = await walletClient.writeContract({
-                  address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'acceptItem',
+                  address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'claim',
                   args: [BigInt(item.id)],
                 })
-                logAction(`#${item.id} accepted: ${hash}`)
-                recordAction('accept', item.id, 'Challenge period expired', hash)
+                logAction(`#${item.id} claimed: ${hash}`)
+                recordAction('claim', item.id, 'Payout claimed', hash)
               } catch (err: any) {
-                logError(`#${item.id} accept failed: ${err?.shortMessage ?? err?.message}`)
+                logError(`#${item.id} claim failed: ${err?.shortMessage ?? err?.message}`)
               }
             } else {
-              recordAction('accept (dry)', item.id, 'Challenge period expired')
+              recordAction('claim (dry)', item.id, 'Payout claimed')
+            }
+          }
+          continue
+        }
+
+        // ── VOTING items (status 0) ──────────────────────────────
+        if (item.status === STATUS_VOTING) {
+          const votingEnd = Number(item.submittedAt) + Number(registryConfig.votingPeriod)
+          const expired = nowSec > votingEnd
+
+          // Resolve expired voting periods
+          if (expired && curatorConfig.autoResolve && !resolvedItems.has(item.id)) {
+            resolvedItems.add(item.id)
+            logAction(`#${item.id} voting period expired — resolving`)
+
+            if (!curatorConfig.dryRun) {
+              try {
+                const hash = await walletClient.writeContract({
+                  address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'resolve',
+                  args: [BigInt(item.id)],
+                })
+                logAction(`#${item.id} resolved: ${hash}`)
+                recordAction('resolve', item.id, 'Voting period expired', hash)
+              } catch (err: any) {
+                logError(`#${item.id} resolve failed: ${err?.shortMessage ?? err?.message}`)
+              }
+            } else {
+              recordAction('resolve (dry)', item.id, 'Voting period expired')
             }
             continue
           }
 
-          // Analyze and maybe challenge (only while challenge period is active)
+          // Analyze and vote (only while voting period is active)
           if (!expired && !processedItems.has(item.id)) {
             processedItems.add(item.id)
 
-            // Don't challenge our own submissions
+            // Don't vote on our own submissions
             if (item.submitter.toLowerCase() === agentAddr.toLowerCase()) {
               logSkip(`#${item.id} own submission — skipping`)
               continue
@@ -332,123 +349,52 @@ export async function runCuratorLoop(
             logInfo(`#${item.id} analyzing ${item.url.slice(0, 60)}...`)
             const analysis = await analyzeItem(item, items)
 
-            if (analysis.status === 'done' && analysis.score < curatorConfig.challengeThreshold) {
-              logAction(`#${item.id} score ${analysis.score} < ${curatorConfig.challengeThreshold} — challenging`)
-              logAction(`  Reason: ${analysis.flagReason ?? analysis.summary ?? 'Low quality'}`)
+            if (analysis.status === 'done') {
+              const keep = analysis.score >= curatorConfig.voteThreshold
+              logAction(`#${item.id} score ${analysis.score} ${keep ? '>=' : '<'} ${curatorConfig.voteThreshold} — voting ${keep ? 'KEEP' : 'REMOVE'}`)
+              if (!keep) {
+                logAction(`  Reason: ${analysis.flagReason ?? analysis.summary ?? 'Low quality'}`)
+              }
 
               if (!curatorConfig.dryRun) {
                 try {
                   const hash = await walletClient.writeContract({
-                    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'challengeItem',
-                    args: [BigInt(item.id)],
+                    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'vote',
+                    args: [BigInt(item.id), keep],
                   })
-                  logAction(`#${item.id} challenged: ${hash}`)
-                  recordAction('challenge', item.id, `Score ${analysis.score} < ${curatorConfig.challengeThreshold}`, hash)
+                  logAction(`#${item.id} voted ${keep ? 'KEEP' : 'REMOVE'}: ${hash}`)
+                  votedItems.add(item.id)
+                  recordAction(keep ? 'vote-keep' : 'vote-remove', item.id, `Score ${analysis.score}`, hash)
                 } catch (err: any) {
-                  logError(`#${item.id} challenge failed: ${err?.shortMessage ?? err?.message}`)
+                  // AlreadyVoted is expected if another agent voted from same humanId
+                  logError(`#${item.id} vote failed: ${err?.shortMessage ?? err?.message}`)
                 }
               } else {
-                recordAction('challenge (dry)', item.id, `Score ${analysis.score} < ${curatorConfig.challengeThreshold}`)
+                votedItems.add(item.id)
+                recordAction(`vote-${keep ? 'keep' : 'remove'} (dry)`, item.id, `Score ${analysis.score}`)
               }
-            } else if (analysis.status === 'done') {
-              logSkip(`#${item.id} score ${analysis.score} — OK`)
             } else if (analysis.status === 'error') {
               logWarn(`#${item.id} analysis error: ${analysis.error}`)
-              // If URL is unreachable, consider challenging
+              // If URL is unreachable, vote REMOVE
               if (analysis.flagged && analysis.flagReason === 'Unreachable URL') {
-                logAction(`#${item.id} unreachable URL — challenging`)
+                logAction(`#${item.id} unreachable URL — voting REMOVE`)
                 if (!curatorConfig.dryRun) {
                   try {
                     const hash = await walletClient.writeContract({
-                      address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'challengeItem',
-                      args: [BigInt(item.id)],
+                      address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'vote',
+                      args: [BigInt(item.id), false],
                     })
-                    logAction(`#${item.id} challenged: ${hash}`)
-                    recordAction('challenge', item.id, 'Unreachable URL', hash)
+                    logAction(`#${item.id} voted REMOVE: ${hash}`)
+                    votedItems.add(item.id)
+                    recordAction('vote-remove', item.id, 'Unreachable URL', hash)
                   } catch (err: any) {
-                    logError(`#${item.id} challenge failed: ${err?.shortMessage ?? err?.message}`)
+                    logError(`#${item.id} vote failed: ${err?.shortMessage ?? err?.message}`)
                   }
                 } else {
-                  recordAction('challenge (dry)', item.id, 'Unreachable URL')
+                  votedItems.add(item.id)
+                  recordAction('vote-remove (dry)', item.id, 'Unreachable URL')
                 }
               }
-            }
-          }
-        }
-
-        // ── CHALLENGED items ───────────────────────────────────────
-        if (item.status === STATUS_CHALLENGED && item.challenge) {
-          const votingEnd = Number(item.challenge.challengedAt) + Number(registryConfig.votingPeriod)
-          const votingExpired = nowSec > votingEnd
-
-          // Resolve expired challenges
-          if (votingExpired && curatorConfig.autoResolve && !resolvedItems.has(item.id)) {
-            resolvedItems.add(item.id)
-            const totalVotes = item.challenge.votesFor + item.challenge.votesAgainst
-            const quorumMet = totalVotes >= registryConfig.minVotes
-            const fn = quorumMet ? 'resolveChallenge' : 'resolveNoQuorum'
-
-            logAction(`#${item.id} voting expired (${totalVotes} votes, quorum ${quorumMet ? 'met' : 'not met'}) — resolving via ${fn}`)
-
-            if (!curatorConfig.dryRun) {
-              try {
-                const hash = await walletClient.writeContract({
-                  address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: fn,
-                  args: [BigInt(item.id)],
-                })
-                logAction(`#${item.id} resolved: ${hash}`)
-                recordAction('resolve', item.id, `${fn}, ${totalVotes} votes`, hash)
-              } catch (err: any) {
-                logError(`#${item.id} resolve failed: ${err?.shortMessage ?? err?.message}`)
-              }
-            } else {
-              recordAction('resolve (dry)', item.id, `${fn}, ${totalVotes} votes`)
-            }
-            continue
-          }
-
-          // Vote on active challenges (only if we haven't voted and didn't challenge it ourselves)
-          if (!votingExpired && !votedItems.has(item.id)) {
-            // Check if we're the challenger — can't vote on own challenge
-            if (item.challenge.challenger.toLowerCase() === agentAddr.toLowerCase()) {
-              votedItems.add(item.id)
-              logSkip(`#${item.id} we challenged this — can't vote`)
-              continue
-            }
-            // Check if we're the submitter — skip voting on own submission
-            if (item.submitter.toLowerCase() === agentAddr.toLowerCase()) {
-              votedItems.add(item.id)
-              logSkip(`#${item.id} our submission — skipping vote`)
-              continue
-            }
-
-            votedItems.add(item.id)
-            logInfo(`#${item.id} analyzing for vote...`)
-            const analysis = await analyzeItem(item, items)
-
-            if (analysis.status !== 'done' && !analysis.flagged) {
-              logWarn(`#${item.id} analysis incomplete — abstaining`)
-              continue
-            }
-
-            // Vote based on score vs threshold
-            const keep = analysis.score >= curatorConfig.voteThreshold
-            logAction(`#${item.id} score ${analysis.score} ${keep ? '>=' : '<'} ${curatorConfig.voteThreshold} — voting ${keep ? 'KEEP' : 'REMOVE'}`)
-
-            if (!curatorConfig.dryRun) {
-              try {
-                const hash = await walletClient.writeContract({
-                  address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'voteOnChallenge',
-                  args: [BigInt(item.id), keep],
-                })
-                logAction(`#${item.id} voted ${keep ? 'KEEP' : 'REMOVE'}: ${hash}`)
-                recordAction(keep ? 'vote-keep' : 'vote-remove', item.id, `Score ${analysis.score}`, hash)
-              } catch (err: any) {
-                // AlreadyVoted is expected if another agent voted from same humanId
-                logError(`#${item.id} vote failed: ${err?.shortMessage ?? err?.message}`)
-              }
-            } else {
-              recordAction(`vote-${keep ? 'keep' : 'remove'} (dry)`, item.id, `Score ${analysis.score}`)
             }
           }
         }
@@ -471,10 +417,9 @@ async function main() {
     options: {
       test: { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
-      'challenge-threshold': { type: 'string', default: '4.0' },
       'vote-threshold': { type: 'string', default: '5.0' },
-      'no-accept': { type: 'boolean', default: false },
       'no-resolve': { type: 'boolean', default: false },
+      'no-claim': { type: 'boolean', default: false },
       'poll-interval': { type: 'string', default: '30' },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -483,7 +428,7 @@ async function main() {
 
   if (values.help) {
     console.log(`
-${BOLD}Newsworthy Curator Agent${RESET} — autonomous curation for FeedRegistry
+${BOLD}Newsworthy Curator Agent${RESET} — autonomous curation for FeedRegistryV2
 
 ${BOLD}Usage:${RESET}
   bun run agent/src/curator.ts [options]
@@ -491,44 +436,39 @@ ${BOLD}Usage:${RESET}
 ${BOLD}Options:${RESET}
   --test                  Use test deployment (MockAgentBook, short periods)
   --dry-run               Log decisions without sending transactions
-  --challenge-threshold N Score below which items are challenged (default: 4.0)
-                          ${DIM}Range 1-10. Higher = more aggressive.${RESET}
-                          ${DIM}  1-3: Only challenges obvious spam${RESET}
-                          ${DIM}  4-5: Challenges mediocre content${RESET}
-                          ${DIM}  6-7: Challenges anything below "good"${RESET}
-                          ${DIM}  8-10: Challenges almost everything${RESET}
-                          ${DIM}Each challenge costs the bond amount in USDC.${RESET}
-                          ${DIM}You earn 2x bond if the challenge succeeds,${RESET}
-                          ${DIM}but lose your bond if the community votes to keep it.${RESET}
   --vote-threshold N      Score below which to vote REMOVE (default: 5.0)
                           ${DIM}Range 1-10. Items scoring above this get a KEEP vote.${RESET}
-                          ${DIM}Voting is free (no bond required).${RESET}
-  --no-accept             Don't auto-accept expired pending items
-  --no-resolve            Don't auto-resolve expired challenges
+                          ${DIM}  1-3: Only votes REMOVE on obvious spam${RESET}
+                          ${DIM}  4-5: Votes REMOVE on mediocre content${RESET}
+                          ${DIM}  6-7: Votes REMOVE on anything below "good"${RESET}
+                          ${DIM}  8-10: Votes REMOVE on almost everything${RESET}
+                          ${DIM}Each vote costs 0.05 USDC (voteCost).${RESET}
+                          ${DIM}You earn a payout if you voted with the majority.${RESET}
+  --no-resolve            Don't auto-resolve expired voting periods
+  --no-claim              Don't auto-claim payouts after resolution
   --poll-interval N       Seconds between scans (default: 30)
   -h, --help              Show this help
 
 ${BOLD}Examples:${RESET}
-  ${DIM}# Conservative curator — only challenges spam${RESET}
-  bun run agent/src/curator.ts --test --challenge-threshold 3.0
+  ${DIM}# Conservative curator — only votes REMOVE on spam${RESET}
+  bun run agent/src/curator.ts --test --vote-threshold 3.0
 
-  ${DIM}# Aggressive curator — challenges anything below "good"${RESET}
-  bun run agent/src/curator.ts --test --challenge-threshold 6.0
+  ${DIM}# Strict curator — votes REMOVE on anything below "good"${RESET}
+  bun run agent/src/curator.ts --test --vote-threshold 7.0
 
   ${DIM}# Dry run — see what the agent would do without spending USDC${RESET}
   bun run agent/src/curator.ts --test --dry-run
 
-  ${DIM}# Vote-only (no challenges, no housekeeping)${RESET}
-  bun run agent/src/curator.ts --test --challenge-threshold 0 --no-accept --no-resolve
+  ${DIM}# Vote-only (no housekeeping)${RESET}
+  bun run agent/src/curator.ts --test --no-resolve --no-claim
 `)
     return
   }
 
   const config: CuratorConfig = {
-    challengeThreshold: parseFloat(values['challenge-threshold'] ?? '4.0'),
     voteThreshold: parseFloat(values['vote-threshold'] ?? '5.0'),
-    autoAccept: !values['no-accept'],
     autoResolve: !values['no-resolve'],
+    autoClaim: !values['no-claim'],
     dryRun: values['dry-run'] ?? false,
     pollIntervalMs: parseInt(values['poll-interval'] ?? '30', 10) * 1000,
   }

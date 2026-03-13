@@ -1,4 +1,6 @@
 .secrets/
+.env
+.env.*
 node_modules/
 bun.lock
 

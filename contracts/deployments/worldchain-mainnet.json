@@ -2,8 +2,8 @@
   "chain": "World Chain",
   "chainId": 480,
   "rpc": "https://worldchain-mainnet.g.alchemy.com/v2/tRRCeUyvs7jVWGa5wX85x",
-  "deployer": "0x894907dc9e2c7F1949f43b79097Ad3E46713Ab00",
-  "deployedAt": "2026-03-04",
+  "deployer": "0xbF2338809bf7dEcBB47513C9F86Af4C79c564627",
+  "deployedAt": "2026-03-13",
   "contracts": {
     "AgentBook": {
       "address": "0xd4c3680c8cd5Ef45F5AbA9402e32D0561A1401cc",
@@ -13,12 +13,28 @@
       "action": "newsworthy-register"
     },
     "FeedRegistry": {
-      "address": "0xA727Cb7128DfcEf3bB0A79FAC6883D3c65cbeC2A",
+      "address": "0xb2d538D2BD69a657A5240c446F0565a7F5d52BBF",
+      "proxy": "0xb2d538D2BD69a657A5240c446F0565a7F5d52BBF",
+      "implementation": "0xDbCcd59F837B5bdeC47F7F9B765328C30d33f90f",
       "agentBook": "0xd4c3680c8cd5Ef45F5AbA9402e32D0561A1401cc",
+      "bondToken": "0x79A02482A880bCE3F13e09Da970dC34db4CD24d1",
+      "newsToken": "0x2e8B4cB9716db48D5AB98ed111a41daC4AE6f8bF",
       "bondAmount": "1 USDC",
-      "challengePeriod": "1 hour",
+      "voteCost": "0.05 USDC",
       "votingPeriod": "1 hour",
-      "minVotes": 3
+      "minVotes": 3,
+      "newsPerItem": "100 NEWS",
+      "maxDailySubmissions": 3
+    },
+    "NewsToken": {
+      "address": "0x2e8B4cB9716db48D5AB98ed111a41daC4AE6f8bF",
+      "symbol": "NEWS",
+      "decimals": 18,
+      "minter": "0xb2d538D2BD69a657A5240c446F0565a7F5d52BBF"
+    },
+    "FeedRegistry_v1": {
+      "address": "0xA727Cb7128DfcEf3bB0A79FAC6883D3c65cbeC2A",
+      "note": "Deprecated — V1 with challenge mechanic, kept for reference"
     }
   }
 }

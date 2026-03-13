@@ -44,7 +44,7 @@ feed.get('/:id', async (c) => {
 feed.get('/pending', async (c) => {
   // Note: mounted at /pending in the main app, not under /feed
   const { results } = await c.env.DB.prepare(
-    `SELECT * FROM articles WHERE status IN ('pending', 'challenged')
+    `SELECT * FROM articles WHERE status = 'pending'
      ORDER BY submitted_at DESC`
   ).all<Article>()
 

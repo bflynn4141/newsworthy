@@ -8,7 +8,7 @@ import {
 
 export const runtime = "nodejs";
 
-interface ChallengedItem {
+interface VotingItem {
   id: number;
   url: string;
   title: string;
@@ -17,7 +17,7 @@ interface ChallengedItem {
   totalVotes: number;
   category: string;
   bond: string;
-  challengedAt: number;
+  submittedAt: number;
   votingEndsAt: number;
   votesFor: number;
   votesAgainst: number;
@@ -69,55 +69,55 @@ export async function GET() {
       allowFailure: true,
     });
 
-    // 3. Filter for status === 1 (Challenged)
-    const challengedIds: number[] = [];
+    // 3. Filter for status === 0 (Voting)
+    const votingIds: number[] = [];
     for (let i = 0; i < itemResults.length; i++) {
       const result = itemResults[i];
       if (result.status === "success") {
-        const [, , , , , status] = result.result;
-        if (Number(status) === 1) {
-          challengedIds.push(i);
+        const [, , , , , , , status] = result.result;
+        if (Number(status) === 0) {
+          votingIds.push(i);
         }
       }
     }
 
-    if (challengedIds.length === 0) {
+    if (votingIds.length === 0) {
       return NextResponse.json({ items: [], total: 0 });
     }
 
-    // 4. Multicall challenges(id) for challenged items
-    const challengeCalls = challengedIds.map((id) => ({
+    // 4. Multicall getVoteSession(id) for voting items
+    const voteSessionCalls = votingIds.map((id) => ({
       address: REGISTRY_ADDRESS as `0x${string}`,
       abi: registryAbi,
-      functionName: "challenges" as const,
+      functionName: "getVoteSession" as const,
       args: [BigInt(id)] as const,
     }));
 
-    const challengeResults = await client.multicall({
-      contracts: challengeCalls,
+    const voteSessionResults = await client.multicall({
+      contracts: voteSessionCalls,
       allowFailure: true,
     });
 
     // 5. Build response
     const votingPeriodSec = Number(votingPeriod);
-    const items: ChallengedItem[] = [];
+    const items: VotingItem[] = [];
 
-    for (let i = 0; i < challengedIds.length; i++) {
-      const itemId = challengedIds[i];
+    for (let i = 0; i < votingIds.length; i++) {
+      const itemId = votingIds[i];
       const itemResult = itemResults[itemId];
-      const challengeResult = challengeResults[i];
+      const sessionResult = voteSessionResults[i];
 
-      if (itemResult.status !== "success" || challengeResult.status !== "success") {
+      if (itemResult.status !== "success" || sessionResult.status !== "success") {
         continue;
       }
 
-      const [submitter, url, , bond, ,] = itemResult.result;
-      const [, , challengedAt, votesFor, votesAgainst] = challengeResult.result;
+      const [submitter, , url, , bond, , submittedAt] = itemResult.result;
+      const [votesFor, votesAgainst] = sessionResult.result;
 
       const handle = extractHandle(url);
-      const title = handle ? `Post by @${handle}` : "Challenged submission";
+      const title = handle ? `Post by @${handle}` : "Submission";
       const totalVotes = Number(votesFor) + Number(votesAgainst);
-      const challengedAtSec = Number(challengedAt);
+      const submittedAtSec = Number(submittedAt);
 
       items.push({
         id: itemId,
@@ -128,8 +128,8 @@ export async function GET() {
         totalVotes,
         category: "news", // Contract doesn't store category; default for now
         bond: formatUnits(bond, 6), // USDC = 6 decimals
-        challengedAt: challengedAtSec,
-        votingEndsAt: challengedAtSec + votingPeriodSec,
+        submittedAt: submittedAtSec,
+        votingEndsAt: submittedAtSec + votingPeriodSec,
         votesFor: Number(votesFor),
         votesAgainst: Number(votesAgainst),
       });
@@ -137,9 +137,9 @@ export async function GET() {
 
     return NextResponse.json({ items, total: items.length });
   } catch (error) {
-    console.error("Failed to fetch challenges:", error);
+    console.error("Failed to fetch voting items:", error);
     return NextResponse.json(
-      { error: "Failed to fetch challenged items", detail: String(error) },
+      { error: "Failed to fetch voting items", detail: String(error) },
       { status: 500 }
     );
   }

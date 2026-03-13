@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { MiniKit } from "@worldcoin/minikit-js";
 import { BottomNav } from "./bottom-nav";
 import { SwipeCard } from "./swipe-card";
-import { REGISTRY_ADDRESS, voteAbi } from "@/lib/contracts";
+import { REGISTRY_ADDRESS, USDC_ADDRESS, VOTE_COST, voteAbi, erc20ApproveAbi } from "@/lib/contracts";
 
 interface PendingItem {
   id: number;
@@ -15,7 +15,7 @@ interface PendingItem {
   totalVotes: number;
   category: string;
   bond: string;
-  challengedAt: number;
+  submittedAt: number;
   votingEndsAt: number;
   votesFor: number;
   votesAgainst: number;
@@ -42,11 +42,11 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
     }
   }, [items.length, currentIndex]);
 
-  // Fetch challenged items from API
+  // Fetch voting items from API
   useEffect(() => {
     let cancelled = false;
 
-    async function fetchChallenges() {
+    async function fetchItems() {
       try {
         setError(null);
         const res = await fetch("/api/challenges");
@@ -64,10 +64,10 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
       }
     }
 
-    fetchChallenges();
+    fetchItems();
 
-    // Poll every 30s for new challenges
-    pollRef.current = setInterval(fetchChallenges, POLL_INTERVAL);
+    // Poll every 30s for new items
+    pollRef.current = setInterval(fetchItems, POLL_INTERVAL);
 
     return () => {
       cancelled = true;
@@ -100,9 +100,15 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
           .sendTransaction({
             transaction: [
               {
+                address: USDC_ADDRESS,
+                abi: erc20ApproveAbi,
+                functionName: "approve",
+                args: [REGISTRY_ADDRESS, VOTE_COST],
+              },
+              {
                 address: REGISTRY_ADDRESS,
                 abi: voteAbi,
-                functionName: "voteOnChallenge",
+                functionName: "vote",
                 args: [votedItemId, direction === "keep"],
               },
             ],
@@ -138,7 +144,7 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
             style={{ borderColor: "#3B82F6", borderTopColor: "transparent" }}
           />
           <p className="text-[13px] mt-4" style={{ color: "#A8A29E" }}>
-            Loading challenges...
+            Loading items...
           </p>
         </div>
         <BottomNav pendingCount={pendingCount} />
@@ -202,7 +208,7 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
         </div>
 
         {isNewOrEmpty ? (
-          /* New User / No Challenges */
+          /* New User / No Items */
           <div className="flex flex-col items-center px-4 pt-8">
             <div
               className="w-16 h-16 rounded-full flex items-center justify-center mb-4"
@@ -216,10 +222,10 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
               </svg>
             </div>
             <p className="text-[17px] font-semibold" style={{ color: "#1A1A1A" }}>
-              No challenges yet
+              No items to vote on
             </p>
             <p className="text-[13px] mt-1 text-center" style={{ color: "#A8A29E" }}>
-              When someone challenges a submission, it&apos;ll appear here.
+              When items are submitted for curation, they&apos;ll appear here.
             </p>
 
             {/* How it works card */}
@@ -233,8 +239,8 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
               <div className="flex flex-col gap-4">
                 {[
                   { num: 1, text: "Someone submits a tweet and bonds 1 USDC" },
-                  { num: 2, text: "Another curator challenges it, matching the bond" },
-                  { num: 3, text: "You vote Keep or Remove — free, and earn a share of the bond pool" },
+                  { num: 2, text: "Anyone can vote Keep or Remove for 0.05 USDC" },
+                  { num: 3, text: "Correct voters earn a share of the losing side's stakes" },
                 ].map(({ num, text }) => (
                   <div key={num} className="flex gap-3">
                     <div

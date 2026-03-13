@@ -11,7 +11,7 @@ import Footer from './Footer.js'
 import DetailPanel from './DetailPanel.js'
 import LeaderboardPanel from './LeaderboardPanel.js'
 
-const COLUMNS: ItemStatus[] = ['pending', 'challenged', 'accepted', 'rejected']
+const COLUMNS: ItemStatus[] = ['pending', 'accepted', 'rejected']
 
 type Props = {
   client: PublicClient
@@ -30,7 +30,6 @@ function computeVisibleItems(
 ): Record<ItemStatus, FeedItem[]> {
   return {
     pending: sortItems(items.pending.filter(i => showFlagged || !i.analysis?.flagged), sortMode),
-    challenged: sortItems(items.challenged.filter(i => showFlagged || !i.analysis?.flagged), sortMode),
     accepted: sortItems(items.accepted.filter(i => showFlagged || !i.analysis?.flagged), sortMode),
     rejected: sortItems(items.rejected.filter(i => showFlagged || !i.analysis?.flagged), sortMode),
   }

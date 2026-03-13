@@ -8,26 +8,19 @@ const EVENTS = {
   ItemSubmitted: parseAbiItem(
     'event ItemSubmitted(uint256 indexed itemId, address indexed submitter, string url)'
   ),
-  ItemChallenged: parseAbiItem(
-    'event ItemChallenged(uint256 indexed itemId, address indexed challenger)'
-  ),
   VoteCast: parseAbiItem(
     'event VoteCast(uint256 indexed itemId, uint256 indexed humanId, bool support)'
   ),
   ItemResolved: parseAbiItem(
     'event ItemResolved(uint256 indexed itemId, uint8 status)'
   ),
-  ItemAccepted: parseAbiItem(
-    'event ItemAccepted(uint256 indexed itemId)'
-  ),
 } as const
 
 // Status mapping: matches the Solidity enum ItemStatus
 const STATUS_MAP: Record<number, string> = {
   0: 'pending',
-  1: 'challenged',
-  2: 'accepted',
-  3: 'rejected',
+  1: 'accepted',
+  2: 'rejected',
 }
 
 /**
@@ -63,9 +56,11 @@ export async function syncEvents(
     inputs: [{ name: 'itemId', type: 'uint256' as const }],
     outputs: [
       { name: 'submitter', type: 'address' as const },
+      { name: 'submitterHumanId', type: 'uint256' as const },
       { name: 'url', type: 'string' as const },
       { name: 'metadataHash', type: 'string' as const },
       { name: 'bond', type: 'uint256' as const },
+      { name: 'voteCostSnapshot', type: 'uint256' as const },
       { name: 'submittedAt', type: 'uint256' as const },
       { name: 'status', type: 'uint8' as const },
     ],
@@ -73,16 +68,10 @@ export async function syncEvents(
   }]
 
   // Fetch all event types in parallel
-  const [submittedLogs, challengedLogs, voteLogs, resolvedLogs, acceptedLogs] = await Promise.all([
+  const [submittedLogs, voteLogs, resolvedLogs] = await Promise.all([
     client.getLogs({
       address: contractAddress,
       event: EVENTS.ItemSubmitted,
-      fromBlock,
-      toBlock: latestBlock,
-    }),
-    client.getLogs({
-      address: contractAddress,
-      event: EVENTS.ItemChallenged,
       fromBlock,
       toBlock: latestBlock,
     }),
@@ -95,12 +84,6 @@ export async function syncEvents(
     client.getLogs({
       address: contractAddress,
       event: EVENTS.ItemResolved,
-      fromBlock,
-      toBlock: latestBlock,
-    }),
-    client.getLogs({
-      address: contractAddress,
-      event: EVENTS.ItemAccepted,
       fromBlock,
       toBlock: latestBlock,
     }),
@@ -140,8 +123,8 @@ export async function syncEvents(
         abi: itemsAbi,
         functionName: 'items',
         args: [itemId],
-      }) as [string, string, string, bigint, bigint, number]
-      const metadataHash = itemData[2]
+      }) as [string, bigint, string, string, bigint, bigint, bigint, number]
+      const metadataHash = itemData[3]
       if (metadataHash === 'ai' || metadataHash === 'crypto') {
         category = metadataHash
       }
@@ -171,22 +154,6 @@ export async function syncEvents(
 
     // Upsert agent submission count
     await upsertAgentScore(db, submitter.toLowerCase(), { submissions: 1 })
-    eventsProcessed++
-  }
-
-  // Process ItemChallenged — update article status + upsert agent scores
-  for (const log of challengedLogs) {
-    const { itemId, challenger } = log.args as {
-      itemId: bigint
-      challenger: string
-    }
-
-    await db
-      .prepare(`UPDATE articles SET status = 'challenged' WHERE id = ?`)
-      .bind(Number(itemId))
-      .run()
-
-    await upsertAgentScore(db, challenger.toLowerCase(), { challenges: 1 })
     eventsProcessed++
   }
 
@@ -231,41 +198,13 @@ export async function syncEvents(
       .bind(statusStr, now, Number(itemId))
       .run()
 
-    // Update reputation for submitter/challenger based on outcome
+    // Update reputation for submitter based on outcome
     const article = await db
       .prepare('SELECT submitter FROM articles WHERE id = ?')
       .bind(Number(itemId))
       .first<{ submitter: string }>()
 
-    if (article) {
-      if (statusStr === 'accepted') {
-        await upsertAgentScore(db, article.submitter, { successful_submissions: 1 })
-      } else if (statusStr === 'rejected') {
-        // Submitter lost — no positive score update
-        // Challenger won — would need to query challenge event to find challenger
-      }
-    }
-
-    eventsProcessed++
-  }
-
-  // Process ItemAccepted — unchallenged items accepted after challenge period
-  for (const log of acceptedLogs) {
-    const { itemId } = log.args as { itemId: bigint }
-
-    const now = Date.now()
-    await db
-      .prepare(`UPDATE articles SET status = 'accepted', resolved_at = ? WHERE id = ? AND status = 'pending'`)
-      .bind(now, Number(itemId))
-      .run()
-
-    // Update submitter's successful_submissions
-    const article = await db
-      .prepare('SELECT submitter FROM articles WHERE id = ?')
-      .bind(Number(itemId))
-      .first<{ submitter: string }>()
-
-    if (article) {
+    if (article && statusStr === 'accepted') {
       await upsertAgentScore(db, article.submitter, { successful_submissions: 1 })
     }
 

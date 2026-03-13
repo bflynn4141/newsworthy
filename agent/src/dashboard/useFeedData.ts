@@ -6,26 +6,26 @@ import { analyzeItem, getCachedAnalysis, detectLlm, getLlmStatus, type ArticleAn
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type ItemStatus = 'pending' | 'challenged' | 'accepted' | 'rejected'
+export type ItemStatus = 'pending' | 'accepted' | 'rejected'
 
 export type FeedItem = {
   id: number
   submitter: Address
+  submitterHumanId: bigint
   url: string
   metadataHash: string
   bond: bigint
+  voteCostSnapshot: bigint
   submittedAt: bigint
   status: number
   // Computed
   timeRemaining: number // seconds, -1 if N/A
-  // Challenge data (only for status=1)
-  challenge?: {
-    challenger: Address
-    bond: bigint
-    challengedAt: bigint
+  // Vote session data (only for status=0, populated from getVoteSession)
+  voteSession?: {
     votesFor: bigint
     votesAgainst: bigint
-    timeRemaining: number
+    keepClaimPerVoter: bigint
+    removeClaimPerVoter: bigint
   }
   // Analysis (populated async)
   analysis?: ArticleAnalysis
@@ -33,7 +33,7 @@ export type FeedItem = {
 
 export type RegistryConfig = {
   bondAmount: bigint
-  challengePeriod: bigint
+  voteCost: bigint
   votingPeriod: bigint
   minVotes: bigint
   bondToken: Address
@@ -69,9 +69,8 @@ export type FeedData = {
 
 const STATUS_MAP: Record<number, ItemStatus> = {
   0: 'pending',
-  1: 'challenged',
-  2: 'accepted',
-  3: 'rejected',
+  1: 'accepted',
+  2: 'rejected',
 }
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
@@ -90,7 +89,7 @@ export function useFeedData(
   const [totalItems, setTotalItems] = useState(0)
   const [dailySubmissions, setDailySubmissions] = useState(0)
   const [items, setItems] = useState<Record<ItemStatus, FeedItem[]>>({
-    pending: [], challenged: [], accepted: [], rejected: [],
+    pending: [], accepted: [], rejected: [],
   })
   const [loading, setLoading] = useState(true)
   const [lastRefreshTime, setLastRefreshTime] = useState(Date.now())
@@ -137,9 +136,9 @@ export function useFeedData(
         // Fetch config every 60s
         let cfg = config
         if (!cfg || Date.now() - configFetchedAt.current > 60_000) {
-          const [bondAmount, challengePeriod, votingPeriod, minVotes, bondToken, newsToken, newsPerItem, maxDailySubmissions] = await Promise.all([
+          const [bondAmount, voteCost, votingPeriod, minVotes, bondToken, newsToken, newsPerItem, maxDailySubmissions] = await Promise.all([
             client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'bondAmount' }),
-            client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'challengePeriod' }),
+            client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'voteCost' }),
             client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'votingPeriod' }),
             client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'minVotes' }),
             client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'bondToken' }),
@@ -154,7 +153,7 @@ export function useFeedData(
           ])
           cfg = {
             bondAmount: bondAmount as bigint,
-            challengePeriod: challengePeriod as bigint,
+            voteCost: voteCost as bigint,
             votingPeriod: votingPeriod as bigint,
             minVotes: minVotes as bigint,
             bondToken: tokenAddr,
@@ -206,7 +205,7 @@ export function useFeedData(
         // Fetch items (skip terminal-state items that are already cached)
         const nowSec = BigInt(Math.floor(Date.now() / 1000))
         const buckets: Record<ItemStatus, FeedItem[]> = {
-          pending: [], challenged: [], accepted: [], rejected: [],
+          pending: [], accepted: [], rejected: [],
         }
 
         const allFetched: FeedItem[] = []
@@ -224,36 +223,32 @@ export function useFeedData(
             (async () => {
               const raw = await client.readContract({
                 address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'items', args: [BigInt(i)],
-              }) as [Address, string, string, bigint, bigint, number]
+              }) as [Address, bigint, string, string, bigint, bigint, bigint, number]
 
-              const [submitter, url, metadataHash, bond, submittedAt, status] = raw
+              const [submitter, submitterHumanId, url, metadataHash, bond, voteCostSnapshot, submittedAt, status] = raw
               const statusKey = STATUS_MAP[status] ?? 'rejected'
 
               let timeRemaining = -1
               if (status === 0 && cfg) {
-                const end = submittedAt + cfg.challengePeriod
+                const end = submittedAt + cfg.votingPeriod
                 timeRemaining = Math.max(0, Number(end - nowSec))
               }
 
               const item: FeedItem = {
-                id: i, submitter, url, metadataHash, bond, submittedAt, status, timeRemaining,
+                id: i, submitter, submitterHumanId, url, metadataHash, bond, voteCostSnapshot, submittedAt, status, timeRemaining,
               }
 
-              // Fetch challenge data for challenged items
-              if (status === 1 && cfg) {
-                const cRaw = await client.readContract({
-                  address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'challenges', args: [BigInt(i)],
-                }) as [Address, bigint, bigint, bigint, bigint]
-                const [challenger, cBond, challengedAt, votesFor, votesAgainst] = cRaw
-                const cEnd = challengedAt + cfg.votingPeriod
-                item.challenge = {
-                  challenger, bond: cBond, challengedAt, votesFor, votesAgainst,
-                  timeRemaining: Math.max(0, Number(cEnd - nowSec)),
-                }
+              // Fetch vote session data for voting items
+              if (status === 0 && cfg) {
+                const vRaw = await client.readContract({
+                  address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'getVoteSession', args: [BigInt(i)],
+                }) as [bigint, bigint, bigint, bigint]
+                const [votesFor, votesAgainst, keepClaimPerVoter, removeClaimPerVoter] = vRaw
+                item.voteSession = { votesFor, votesAgainst, keepClaimPerVoter, removeClaimPerVoter }
               }
 
-              // Cache terminal-state items
-              if (status === 2 || status === 3) {
+              // Cache terminal-state items (1=Accepted, 2=Rejected)
+              if (status === 1 || status === 2) {
                 terminalCache.current.set(i, item)
               }
 
@@ -307,14 +302,7 @@ export function useFeedData(
   if (config) {
     liveItems.pending = attachAnalysis(items.pending.map(item => ({
       ...item,
-      timeRemaining: Math.max(0, Number(item.submittedAt + config.challengePeriod) - nowSec),
-    })))
-    liveItems.challenged = attachAnalysis(items.challenged.map(item => ({
-      ...item,
-      challenge: item.challenge ? {
-        ...item.challenge,
-        timeRemaining: Math.max(0, Number(item.challenge.challengedAt + config.votingPeriod) - nowSec),
-      } : item.challenge,
+      timeRemaining: Math.max(0, Number(item.submittedAt + config.votingPeriod) - nowSec),
     })))
     liveItems.accepted = attachAnalysis(items.accepted)
     liveItems.rejected = attachAnalysis(items.rejected)

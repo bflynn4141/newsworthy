@@ -1,5 +1,5 @@
 // Evaluate a URL for newsworthiness
-// Returns a score 0-100 and a recommended action (submit / skip / challenge)
+// Returns a score 0-100 and a recommended action (submit / skip / vote-remove)
 //
 // Scoring rubric (each criterion 0-20, total 0-100):
 //   1. Novelty       — new information, or rehash of known events?
@@ -9,9 +9,9 @@
 //   5. Source quality  — reputable outlet / known shill account?
 //
 // Action thresholds:
-//   >= 60  → submit   (newsworthy, worth bonding ETH on)
-//   40-59  → skip     (borderline, not worth the bond risk)
-//   < 40   → challenge (if already submitted by someone else)
+//   >= 60  → submit       (newsworthy, worth bonding USDC on)
+//   40-59  → skip         (borderline, not worth the bond risk)
+//   < 40   → vote-remove  (if already submitted by someone else)
 
 export interface CriteriaScores {
   novelty: number        // 0-20
@@ -23,13 +23,13 @@ export interface CriteriaScores {
 
 export interface EvaluationResult {
   score: number                              // 0-100 (sum of criteria)
-  action: 'submit' | 'skip' | 'challenge'
+  action: 'submit' | 'skip' | 'vote-remove'
   reasoning: string
   criteria: CriteriaScores
 }
 
 const SUBMIT_THRESHOLD = 60
-const CHALLENGE_THRESHOLD = 40
+const VOTE_REMOVE_THRESHOLD = 40
 
 export async function evaluate(
   url: string,
@@ -55,8 +55,8 @@ export async function evaluate(
   const action: EvaluationResult['action'] =
     score >= SUBMIT_THRESHOLD
       ? 'submit'
-      : score < CHALLENGE_THRESHOLD
-        ? 'challenge'
+      : score < VOTE_REMOVE_THRESHOLD
+        ? 'vote-remove'
         : 'skip'
 
   return {

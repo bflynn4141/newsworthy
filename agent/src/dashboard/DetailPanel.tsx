@@ -18,10 +18,9 @@ function scoreColor(score: number): string {
 }
 
 const STATUS_LABELS: Record<number, { label: string; color: string }> = {
-  0: { label: 'Pending', color: 'yellow' },
-  1: { label: 'Challenged', color: 'red' },
-  2: { label: 'Accepted', color: 'green' },
-  3: { label: 'Rejected', color: 'gray' },
+  0: { label: 'Voting', color: 'yellow' },
+  1: { label: 'Accepted', color: 'green' },
+  2: { label: 'Rejected', color: 'gray' },
 }
 
 type Props = {
@@ -78,28 +77,20 @@ export default function DetailPanel({ item, cols, config }: Props) {
         )}
       </Box>
 
-      {/* Challenge info */}
-      {item.status === 1 && item.challenge && (
+      {/* Vote session info */}
+      {item.status === 0 && item.voteSession && (
         <Box marginTop={1} flexDirection="column">
-          <Text bold dimColor>── Challenge ──</Text>
-          <Text>
-            <Text dimColor>Challenger: </Text>
-            <Text>{item.challenge.challenger}</Text>
-          </Text>
-          <Text>
-            <Text dimColor>Bond:       </Text>
-            <Text>{fmtBond(item.challenge.bond)}</Text>
-          </Text>
+          <Text bold dimColor>── Votes ──</Text>
           <Text>
             <Text dimColor>Votes:      </Text>
-            <Text color="green">{item.challenge.votesFor.toString()} keep</Text>
+            <Text color="green">{item.voteSession.votesFor.toString()} keep</Text>
             <Text> / </Text>
-            <Text color="red">{item.challenge.votesAgainst.toString()} remove</Text>
+            <Text color="red">{item.voteSession.votesAgainst.toString()} remove</Text>
           </Text>
           <Text>
             <Text dimColor>Time:       </Text>
-            <Text color={item.challenge.timeRemaining <= 0 ? 'green' : 'yellow'}>
-              {formatTime(item.challenge.timeRemaining)}
+            <Text color={item.timeRemaining <= 0 ? 'green' : 'yellow'}>
+              {formatTime(item.timeRemaining)}
             </Text>
           </Text>
         </Box>

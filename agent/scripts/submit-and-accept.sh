@@ -1,5 +1,5 @@
 #!/bin/bash
-# Submit 6 tweets (3 per wallet), wait 31 min for challenge period, then accept + sync.
+# Submit 6 tweets (3 per wallet), wait 31 min for voting period, then resolve + sync.
 # Usage: ./scripts/submit-and-accept.sh
 set -e
 
@@ -13,13 +13,13 @@ echo "=== Batch 2: Migrator (3 AI tweets) ==="
 bun run scripts/submit-categorized.ts migrator
 
 echo ""
-echo "=== Waiting 31 minutes for challenge period to expire ==="
+echo "=== Waiting 31 minutes for voting period to expire ==="
 echo "Started at: $(date)"
 echo "Will resume at: $(date -v+31M 2>/dev/null || date -d '+31 minutes')"
 sleep 1860
 
 echo ""
-echo "=== Accepting all pending items ==="
+echo "=== Resolving all expired voting items ==="
 bun run scripts/accept-items.ts
 
 echo ""

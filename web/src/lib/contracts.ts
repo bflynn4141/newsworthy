@@ -20,13 +20,17 @@ export const worldchain = defineChain({
   },
 });
 
-export const REGISTRY_ADDRESS = "0xF6bfE9084a8d615637A3Be609d737F94faC277ca" as const;
-export const AGENTBOOK_ADDRESS = "0x04436Df79E8A4604AF12abe21f275143e6bF47f2" as const;
+export const REGISTRY_ADDRESS = "0xb2d538D2BD69a657A5240c446F0565a7F5d52BBF" as const;
+export const AGENTBOOK_ADDRESS = "0xd4c3680c8cd5Ef45F5AbA9402e32D0561A1401cc" as const;
+export const USDC_ADDRESS = "0x79A02482A880bCE3F13e09Da970dC34db4CD24d1" as const;
 
-// Block when FeedRegistry was deployed — avoids scanning from genesis
-export const REGISTRY_DEPLOY_BLOCK = BigInt(26707740);
+// Block when FeedRegistryV2 was deployed — avoids scanning from genesis
+export const REGISTRY_DEPLOY_BLOCK = BigInt(27052617);
 
-// Minimal ABI — only functions the app needs
+// 0.05 USDC (6 decimals) = 50000
+export const VOTE_COST = BigInt(50000);
+
+// Minimal ABI — only functions the app needs (V2)
 export const registryAbi = [
   {
     type: "function",
@@ -34,9 +38,11 @@ export const registryAbi = [
     inputs: [{ name: "id", type: "uint256" }],
     outputs: [
       { name: "submitter", type: "address" },
+      { name: "submitterHumanId", type: "uint256" },
       { name: "url", type: "string" },
-      { name: "metadataHash", type: "bytes32" },
+      { name: "metadataHash", type: "string" },
       { name: "bond", type: "uint256" },
+      { name: "voteCostSnapshot", type: "uint256" },
       { name: "submittedAt", type: "uint256" },
       { name: "status", type: "uint8" },
     ],
@@ -44,27 +50,19 @@ export const registryAbi = [
   },
   {
     type: "function",
-    name: "challenges",
-    inputs: [{ name: "id", type: "uint256" }],
+    name: "getVoteSession",
+    inputs: [{ name: "itemId", type: "uint256" }],
     outputs: [
-      { name: "challenger", type: "address" },
-      { name: "bond", type: "uint256" },
-      { name: "challengedAt", type: "uint256" },
       { name: "votesFor", type: "uint256" },
       { name: "votesAgainst", type: "uint256" },
+      { name: "keepClaimPerVoter", type: "uint256" },
+      { name: "removeClaimPerVoter", type: "uint256" },
     ],
     stateMutability: "view",
   },
   {
     type: "function",
     name: "nextItemId",
-    inputs: [],
-    outputs: [{ name: "", type: "uint256" }],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "challengePeriod",
     inputs: [],
     outputs: [{ name: "", type: "uint256" }],
     stateMutability: "view",
@@ -79,6 +77,13 @@ export const registryAbi = [
   {
     type: "function",
     name: "bondAmount",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "voteCost",
     inputs: [],
     outputs: [{ name: "", type: "uint256" }],
     stateMutability: "view",
@@ -111,10 +116,10 @@ export const registryAbi = [
   },
   {
     type: "function",
-    name: "voteOnChallenge",
+    name: "vote",
     inputs: [
       { name: "itemId", type: "uint256" },
-      { name: "keep", type: "bool" },
+      { name: "support", type: "bool" },
     ],
     outputs: [],
     stateMutability: "nonpayable",
@@ -125,12 +130,26 @@ export const registryAbi = [
 export const voteAbi = [
   {
     type: "function",
-    name: "voteOnChallenge",
+    name: "vote",
     inputs: [
       { name: "itemId", type: "uint256" },
-      { name: "keep", type: "bool" },
+      { name: "support", type: "bool" },
     ],
     outputs: [],
+    stateMutability: "nonpayable",
+  },
+];
+
+// Standard ERC20 approve ABI for USDC approval before voting
+export const erc20ApproveAbi = [
+  {
+    type: "function",
+    name: "approve",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
     stateMutability: "nonpayable",
   },
 ];

@@ -12,7 +12,6 @@ export const SORT_LABELS: Record<SortMode, string> = {
 }
 
 function getTimeRemaining(item: FeedItem): number {
-  if (item.status === 1 && item.challenge) return item.challenge.timeRemaining
   if (item.status === 0) return item.timeRemaining
   return Infinity // no timer — sort last
 }

@@ -8,18 +8,17 @@
 // Commands (read):
 //   status          Registry overview: bond, periods, deployer balance
 //   items           List all items with ID, status, submitter, URL
-//   item <id>       Detail view for a single item + challenge info
+//   item <id>       Detail view for a single item + vote session info
 //   leaderboard     $NEWS earnings leaderboard (who earned, not who holds)
 //   register        Check if deployer is registered in AgentBook
 //   dashboard       Live TUI dashboard (auto-refreshing, requires Node)
 //
 // Commands (write — costs gas):
 //   submit <url> [meta]     Submit news item with bond
-//   challenge <id>          Challenge a pending item
-//   vote <id> <keep|remove> Vote on a challenged item
-//   resolve <id>            Resolve a challenge (auto-detects quorum)
-//   accept <id>             Accept an unchallenged item past grace period
-//   withdraw                Claim pending ETH rewards
+//   vote <id> <keep|remove> Vote on a voting item
+//   resolve <id>            Resolve an item after voting period
+//   claim <id>              Claim voter rewards for a resolved item
+//   withdraw                Claim pending USDC rewards
 //
 // Flags:
 //   --test    Use test contracts (MockAgentBook, relaxed params)
@@ -67,17 +66,15 @@ type Deployment = {
 const EXPLORER = 'https://worldchain-mainnet.explorer.alchemy.com'
 
 const STATUS_NAMES: Record<number, string> = {
-  0: 'Pending',
-  1: 'Challenged',
-  2: 'Accepted',
-  3: 'Rejected',
+  0: 'Voting',
+  1: 'Accepted',
+  2: 'Rejected',
 }
 
 const STATUS_COLORS: Record<number, string> = {
   0: '\x1b[33m',  // yellow
-  1: '\x1b[31m',  // red
-  2: '\x1b[32m',  // green
-  3: '\x1b[90m',  // dim
+  1: '\x1b[32m',  // green
+  2: '\x1b[31m',  // red
 }
 
 const RESET = '\x1b[0m'
@@ -154,11 +151,11 @@ async function cmdStatus(
   registryAddr: Address,
   agentBookAddr: Address,
 ) {
-  const [bond, challengePeriod, votingPeriod, minVotes, nextId, balance] = await Promise.all([
+  const [bond, votingPeriod, minVotes, voteCost, nextId, balance] = await Promise.all([
     client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'bondAmount' }),
-    client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'challengePeriod' }),
     client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'votingPeriod' }),
     client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'minVotes' }),
+    client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'voteCost' }),
     client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'nextItemId' }),
     client.getBalance({ address: deployment.deployer as Address }),
   ])
@@ -186,7 +183,7 @@ async function cmdStatus(
   const newsBal = await client.readContract({ address: newsTokenAddr, abi: ERC20_ABI, functionName: 'balanceOf', args: [deployment.deployer as Address] }) as bigint
 
   console.log(`  Bond:             ${formatUnits(bond as bigint, tokenDecimals)} ${tokenSymbol}`)
-  console.log(`  Challenge period: ${formatDuration(Number(challengePeriod as bigint))}`)
+  console.log(`  Vote cost:        ${formatUnits(voteCost as bigint, tokenDecimals)} ${tokenSymbol}`)
   console.log(`  Voting period:    ${formatDuration(Number(votingPeriod as bigint))}`)
   console.log(`  Min votes:        ${(minVotes as bigint).toString()}`)
   console.log(`  Total items:      ${(nextId as bigint).toString()}`)
@@ -216,9 +213,9 @@ async function cmdItems(client: PublicClient, registryAddr: Address) {
   for (let i = 0n; i < nextId; i++) {
     const item = await client.readContract({
       address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'items', args: [i],
-    }) as [Address, string, string, bigint, bigint, number]
+    }) as [Address, bigint, string, string, bigint, bigint, bigint, number]
 
-    const [submitter, url, , bond, , status] = item
+    const [submitter, , url, , bond, , , status] = item
     console.log(`  ${BOLD}#${i}${RESET}  ${statusLabel(status)}  ${formatUnits(bond, 6)} USDC  ${DIM}${submitter.slice(0, 10)}…${RESET}`)
     console.log(`      ${url}`)
   }
@@ -228,40 +225,43 @@ async function cmdItems(client: PublicClient, registryAddr: Address) {
 async function cmdItem(client: PublicClient, registryAddr: Address, itemId: bigint) {
   const item = await client.readContract({
     address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'items', args: [itemId],
-  }) as [Address, string, string, bigint, bigint, number]
+  }) as [Address, bigint, string, string, bigint, bigint, bigint, number]
 
-  const [submitter, url, metadataHash, bond, submittedAt, status] = item
+  const [submitter, submitterHumanId, url, metadataHash, bond, voteCostSnapshot, submittedAt, status] = item
 
-  const [challengePeriod, votingPeriod] = await Promise.all([
-    client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'challengePeriod' }) as Promise<bigint>,
-    client.readContract({ address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'votingPeriod' }) as Promise<bigint>,
-  ])
+  const votingPeriod = await client.readContract({
+    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'votingPeriod',
+  }) as bigint
 
   console.log(`\n${BOLD}═══ Item #${itemId} ═══${RESET}\n`)
   console.log(`  Status:       ${statusLabel(status)}`)
   console.log(`  URL:          ${url}`)
   console.log(`  Metadata:     ${metadataHash || DIM + '(none)' + RESET}`)
   console.log(`  Submitter:    ${DIM}${submitter}${RESET}`)
+  console.log(`  Human ID:     ${submitterHumanId.toString()}`)
   console.log(`  Bond:         ${formatUnits(bond, 6)} USDC`)
+  console.log(`  Vote cost:    ${formatUnits(voteCostSnapshot, 6)} USDC`)
   console.log(`  Submitted at: ${new Date(Number(submittedAt) * 1000).toISOString()}`)
 
   if (status === 0) {
-    console.log(`  Challenge:    ${timeRemaining(submittedAt, challengePeriod)}`)
+    console.log(`  Voting:       ${timeRemaining(submittedAt, votingPeriod)}`)
   }
 
-  if (status === 1) {
-    const challenge = await client.readContract({
-      address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'challenges', args: [itemId],
-    }) as [Address, bigint, bigint, bigint, bigint]
+  // Show vote session data for all items
+  const voteSession = await client.readContract({
+    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'getVoteSession', args: [itemId],
+  }) as [bigint, bigint, bigint, bigint]
 
-    const [challenger, cBond, challengedAt, votesFor, votesAgainst] = challenge
+  const [votesFor, votesAgainst, keepClaimPerVoter, removeClaimPerVoter] = voteSession
 
-    console.log(`\n  ${BOLD}── Challenge ──${RESET}`)
-    console.log(`  Challenger:   ${DIM}${challenger}${RESET}`)
-    console.log(`  Bond:         ${formatUnits(cBond, 6)} USDC`)
+  if (votesFor > 0n || votesAgainst > 0n) {
+    console.log(`\n  ${BOLD}── Votes ──${RESET}`)
     console.log(`  Votes keep:   ${votesFor.toString()}`)
     console.log(`  Votes remove: ${votesAgainst.toString()}`)
-    console.log(`  Voting:       ${timeRemaining(challengedAt, votingPeriod)}`)
+    if (status !== 0) {
+      console.log(`  Keep claim:   ${formatUnits(keepClaimPerVoter, 6)} USDC/voter`)
+      console.log(`  Remove claim: ${formatUnits(removeClaimPerVoter, 6)} USDC/voter`)
+    }
   }
   console.log()
 }
@@ -316,44 +316,6 @@ async function cmdSubmit(
   console.log(`\x1b[32m✓\x1b[0m Submitted: ${txLink(hash)}\n`)
 }
 
-async function cmdChallenge(
-  client: PublicClient, rpcUrl: string, registryAddr: Address, itemId: bigint,
-) {
-  const walletClient = await getWalletClient(rpcUrl)
-
-  const item = await client.readContract({
-    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'items', args: [itemId],
-  }) as [Address, string, string, bigint, bigint, number]
-
-  const bond = item[3]
-  const bondToken = await client.readContract({
-    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'bondToken',
-  }) as Address
-
-  // Ensure approval
-  const allowance = await client.readContract({
-    address: bondToken, abi: ERC20_ABI, functionName: 'allowance',
-    args: [walletClient.account!.address, registryAddr],
-  }) as bigint
-  if (allowance < bond) {
-    console.log(`Approving bond token for registry...`)
-    await walletClient.writeContract({
-      address: bondToken, abi: ERC20_ABI, functionName: 'approve',
-      args: [registryAddr, 2n ** 256n - 1n],
-    })
-  }
-
-  console.log(`\nChallenging item #${itemId}`)
-  console.log(`Bond: ${formatUnits(bond, 6)} USDC`)
-
-  const hash = await walletClient.writeContract({
-    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'challengeItem',
-    args: [itemId],
-  })
-
-  console.log(`\x1b[32m✓\x1b[0m Challenged: ${txLink(hash)}\n`)
-}
-
 async function cmdVote(
   client: PublicClient, rpcUrl: string, registryAddr: Address,
   itemId: bigint, support: boolean,
@@ -363,7 +325,7 @@ async function cmdVote(
   console.log(`\nVoting ${support ? '\x1b[32mKEEP\x1b[0m' : '\x1b[31mREMOVE\x1b[0m'} on item #${itemId}`)
 
   const hash = await walletClient.writeContract({
-    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'voteOnChallenge',
+    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'vote',
     args: [itemId, support],
   })
 
@@ -375,53 +337,29 @@ async function cmdResolve(
 ) {
   const walletClient = await getWalletClient(rpcUrl)
 
-  const [challenge, minVotes] = await Promise.all([
-    client.readContract({
-      address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'challenges', args: [itemId],
-    }) as Promise<[Address, bigint, bigint, bigint, bigint]>,
-    client.readContract({
-      address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'minVotes',
-    }) as Promise<bigint>,
-  ])
-
-  const [, , , votesFor, votesAgainst] = challenge
-  const totalVotes = votesFor + votesAgainst
-  const quorumMet = totalVotes >= minVotes
-
   console.log(`\nResolving item #${itemId}`)
-  console.log(`Votes: ${votesFor} keep / ${votesAgainst} remove (${totalVotes} total, need ${minVotes})`)
 
-  let hash: `0x${string}`
-  if (quorumMet) {
-    console.log(`Quorum met — calling resolveChallenge`)
-    hash = await walletClient.writeContract({
-      address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'resolveChallenge',
-      args: [itemId],
-    })
-  } else {
-    console.log(`No quorum — calling resolveNoQuorum (bonds returned)`)
-    hash = await walletClient.writeContract({
-      address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'resolveNoQuorum',
-      args: [itemId],
-    })
-  }
+  const hash = await walletClient.writeContract({
+    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'resolve',
+    args: [itemId],
+  })
 
   console.log(`\x1b[32m✓\x1b[0m Resolved: ${txLink(hash)}\n`)
 }
 
-async function cmdAccept(
+async function cmdClaim(
   client: PublicClient, rpcUrl: string, registryAddr: Address, itemId: bigint,
 ) {
   const walletClient = await getWalletClient(rpcUrl)
 
-  console.log(`\nAccepting item #${itemId}`)
+  console.log(`\nClaiming voter rewards for item #${itemId}`)
 
   const hash = await walletClient.writeContract({
-    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'acceptItem',
+    address: registryAddr, abi: FEED_REGISTRY_ABI, functionName: 'claim',
     args: [itemId],
   })
 
-  console.log(`\x1b[32m✓\x1b[0m Accepted: ${txLink(hash)}\n`)
+  console.log(`\x1b[32m✓\x1b[0m Claimed: ${txLink(hash)}\n`)
 }
 
 async function cmdWithdraw(
@@ -532,10 +470,9 @@ ${BOLD}Read commands:${RESET}
 
 ${BOLD}Write commands:${RESET} (costs gas)
   submit <url> [meta] Submit item with bond
-  challenge <id>      Challenge a pending item
-  vote <id> <keep|remove>  Vote on challenged item
-  resolve <id>        Resolve a challenge
-  accept <id>         Accept unchallenged item
+  vote <id> <keep|remove>  Vote on a voting item
+  resolve <id>        Resolve an item after voting period
+  claim <id>          Claim voter rewards for a resolved item
   withdraw            Claim pending USDC rewards
 
 ${BOLD}Flags:${RESET}
@@ -594,13 +531,6 @@ ${BOLD}Flags:${RESET}
         break
       }
 
-      case 'challenge': {
-        const id = positionals[1]
-        if (id === undefined) die('Usage: challenge <id>')
-        await cmdChallenge(client, writeRpcUrl, registryAddr, BigInt(id))
-        break
-      }
-
       case 'vote': {
         const id = positionals[1]
         const direction = positionals[2]
@@ -617,10 +547,10 @@ ${BOLD}Flags:${RESET}
         break
       }
 
-      case 'accept': {
+      case 'claim': {
         const id = positionals[1]
-        if (id === undefined) die('Usage: accept <id>')
-        await cmdAccept(client, writeRpcUrl, registryAddr, BigInt(id))
+        if (id === undefined) die('Usage: claim <id>')
+        await cmdClaim(client, writeRpcUrl, registryAddr, BigInt(id))
         break
       }
 

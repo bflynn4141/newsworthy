@@ -68,7 +68,7 @@ gated.route('/feed', feed)
 // Pending items — also gated
 gated.get('/pending', async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT * FROM articles WHERE status IN ('pending', 'challenged')
+    `SELECT * FROM articles WHERE status = 'pending'
      ORDER BY submitted_at DESC`
   ).all()
 

@@ -3,7 +3,7 @@ import { useInput, useApp } from 'ink'
 import type { FeedItem, ItemStatus } from './useFeedData.js'
 import { SORT_MODES, type SortMode } from './sortItems.js'
 
-const COLUMNS: ItemStatus[] = ['pending', 'challenged', 'accepted', 'rejected']
+const COLUMNS: ItemStatus[] = ['pending', 'accepted', 'rejected']
 
 export type NavigationState = {
   selectedCol: number
@@ -48,7 +48,7 @@ export function useNavigation(
   // Close detail if item disappears from visible list
   useEffect(() => {
     if (!detailItem) return
-    const allVisible = [...items.pending, ...items.challenged, ...items.accepted, ...items.rejected]
+    const allVisible = [...items.pending, ...items.accepted, ...items.rejected]
     if (!allVisible.some(i => i.id === detailItem.id)) {
       setDetailItem(null)
     }

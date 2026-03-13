@@ -55,19 +55,17 @@ export default function ItemCard({ item, isSelected, minVotes = 1 }: Props) {
   const addr = shortAddress(item.submitter)
   const rep = analysis?.submitterScore
 
-  // Animated vote counts for challenged items
-  const votesFor = useAnimatedValue(item.challenge ? Number(item.challenge.votesFor) : 0, 400)
-  const votesAgainst = useAnimatedValue(item.challenge ? Number(item.challenge.votesAgainst) : 0, 400)
+  // Animated vote counts for voting items
+  const votesFor = useAnimatedValue(item.voteSession ? Number(item.voteSession.votesFor) : 0, 400)
+  const votesAgainst = useAnimatedValue(item.voteSession ? Number(item.voteSession.votesAgainst) : 0, 400)
 
   // Status flash — highlight when item changes status
   const isFlashing = useStatusFlash(item.status)
-  const flashColor = item.status === 2 ? 'green' : item.status === 3 ? 'red' : 'cyan'
+  const flashColor = item.status === 1 ? 'green' : item.status === 2 ? 'red' : 'cyan'
 
-  // Time line (pending or challenged)
-  const hasTimer = item.status === 0 || (item.status === 1 && item.challenge)
-  const timerSeconds = item.status === 1 && item.challenge
-    ? item.challenge.timeRemaining
-    : item.timeRemaining
+  // Time line (voting items only)
+  const hasTimer = item.status === 0
+  const timerSeconds = item.timeRemaining
   const timerExpired = hasTimer && timerSeconds <= 0
 
   // Countdown urgency: red when < 60s
@@ -93,8 +91,8 @@ export default function ItemCard({ item, isSelected, minVotes = 1 }: Props) {
         )}
       </Text>
 
-      {/* Line 2 (challenged only): Quorum progress bar */}
-      {item.status === 1 && item.challenge && (
+      {/* Line 2 (voting only): Quorum progress bar */}
+      {item.status === 0 && item.voteSession && (
         <Text>
           {'  '}
           <Text color="cyan">
