@@ -1,7 +1,7 @@
 import { headers } from "next/headers";
-import { fetchFeed, fetchStats } from "@/lib/api";
-import { FeedView } from "@/components/mini/feed-view";
+import { redirect } from "next/navigation";
 import { LandingPage } from "@/components/landing-page";
+import { MiniKitRedirect } from "@/components/mini/minikit-redirect";
 
 export const dynamic = "force-dynamic";
 
@@ -14,22 +14,20 @@ export default async function Home({
   const headersList = await headers();
   const ua = headersList.get("user-agent") ?? "";
 
+  // Fast path: server-side UA detection
   const isWorldApp = ua.includes("WorldApp");
   const forceApp = params.app === "1";
 
   if (isWorldApp || forceApp) {
-    const [feedData, stats] = await Promise.all([
-      fetchFeed(50, 0),
-      fetchStats(),
-    ]);
-
-    return (
-      <FeedView
-        items={feedData.items}
-        pendingCount={stats.pendingItems + stats.challengedItems}
-      />
-    );
+    redirect("/mini");
   }
 
-  return <LandingPage />;
+  // Landing page with client-side MiniKit fallback
+  // If MiniKit is installed (World App webview), redirect to /mini
+  return (
+    <>
+      <MiniKitRedirect />
+      <LandingPage />
+    </>
+  );
 }
