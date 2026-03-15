@@ -18,3 +18,7 @@ PAYMENT_RECIPIENT = "0xA145882271662D59362924B3fD2Ed22Df5B9331c"
 
 [ai]
 binding = "AI"
+
+# Auto-sync every 2 minutes
+[triggers]
+crons = ["*/2 * * * *"]

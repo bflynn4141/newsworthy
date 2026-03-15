@@ -119,4 +119,35 @@ app.onError((err, c) => {
   return c.json({ error: 'Internal server error' }, 500)
 })
 
-export default app
+// V2 deploy block — avoids scanning from genesis
+const DEPLOY_BLOCK = 27052617n
+
+export default {
+  fetch: app.fetch,
+
+  // Cron-triggered sync: runs every 2 minutes, picks up from last synced block
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
+    // Read last synced block from D1
+    const meta = await env.DB.prepare(
+      `SELECT value FROM sync_meta WHERE key = 'last_synced_block'`
+    ).first<{ value: string }>()
+
+    const fromBlock = meta ? BigInt(meta.value) + 1n : DEPLOY_BLOCK
+
+    const result = await syncEvents(
+      env.DB,
+      env.WORLD_CHAIN_RPC,
+      env.FEED_REGISTRY_ADDRESS,
+      fromBlock,
+      env.AI,
+    )
+
+    // Persist last synced block
+    await env.DB.prepare(
+      `INSERT INTO sync_meta (key, value) VALUES ('last_synced_block', ?)
+       ON CONFLICT (key) DO UPDATE SET value = ?`
+    ).bind(result.syncedToBlock.toString(), result.syncedToBlock.toString()).run()
+
+    console.log(`[cron] Synced to block ${result.syncedToBlock}, ${result.eventsProcessed} events`)
+  },
+}
