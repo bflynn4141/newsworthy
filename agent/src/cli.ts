@@ -10,7 +10,7 @@
 //   items           List all items with ID, status, submitter, URL
 //   item <id>       Detail view for a single item + vote session info
 //   leaderboard     $NEWS earnings leaderboard (who earned, not who holds)
-//   register        Check if deployer is registered in AgentBook
+//   register        Register agent via World ID (QR code + on-chain)
 //   dashboard       Live TUI dashboard (auto-refreshing, requires Node)
 //
 // Commands (write — costs gas):
@@ -42,13 +42,15 @@ import {
   parseAbiItem,
   formatEther,
   formatUnits,
+  decodeAbiParameters,
   type Address,
   type PublicClient,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { worldchain } from 'viem/chains'
 import { FEED_REGISTRY_ABI, ERC20_ABI } from './curate.js'
-import { AGENTBOOK_ABI } from './register.js'
+import { AGENTBOOK_ABI, isRegistered, getNextNonce, registerAgent, type WorldIdProof } from './register.js'
+import qrcode from 'qrcode-terminal'
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -80,6 +82,10 @@ const STATUS_COLORS: Record<number, string> = {
 const RESET = '\x1b[0m'
 const BOLD = '\x1b[1m'
 const DIM = '\x1b[90m'
+const GREEN = '\x1b[32m'
+const RED = '\x1b[31m'
+
+const API_BASE = 'https://newsworthy-api.bflynn4141.workers.dev'
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -266,18 +272,155 @@ async function cmdItem(client: PublicClient, registryAddr: Address, itemId: bigi
   console.log()
 }
 
-async function cmdRegister(client: PublicClient, agentBookAddr: Address, deployer: Address) {
+async function cmdRegister(
+  client: PublicClient,
+  agentBookAddr: Address,
+  deployer: Address,
+  rpcUrl: string,
+  isTest: boolean,
+) {
+  // 1. Check if already registered
   const humanId = await client.readContract({
     address: agentBookAddr, abi: AGENTBOOK_ABI, functionName: 'lookupHuman',
     args: [deployer],
   }) as bigint
 
   if (humanId !== 0n) {
-    console.log(`\n\x1b[32m✓\x1b[0m Registered as humanId: ${humanId}\n`)
+    console.log(`\n${GREEN}✓${RESET} Already registered as humanId: ${BOLD}${humanId}${RESET}\n`)
+    return
+  }
+
+  // 2. Test mode — no World ID flow
+  if (isTest) {
+    console.log(`\n${DIM}Test mode: MockAgentBook auto-registers the deployer.${RESET}`)
+    console.log(`${DIM}No World ID verification needed in test mode.${RESET}\n`)
+    return
+  }
+
+  console.log(`\n${BOLD}═══ World ID Registration ═══${RESET}\n`)
+  console.log(`  ${DIM}Agent address: ${deployer}${RESET}\n`)
+
+  // 3. Fetch nonce from AgentBook
+  const nonce = await client.readContract({
+    address: agentBookAddr, abi: AGENTBOOK_ABI, functionName: 'getNextNonce',
+    args: [deployer],
+  }) as bigint
+  console.log(`  Nonce: ${nonce}`)
+
+  // 4. Create registration session via API
+  let sessionId: string
+  try {
+    const res = await fetch(`${API_BASE}/register/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentAddress: deployer, nonce: Number(nonce) }),
+    })
+    if (!res.ok) {
+      const body = await res.text()
+      die(`Failed to create registration session: ${res.status} ${body}`)
+    }
+    const data = (await res.json()) as { sessionId: string }
+    sessionId = data.sessionId
+  } catch (err: any) {
+    die(`Failed to create registration session: ${err?.message ?? String(err)}`)
+  }
+
+  console.log(`  Session: ${DIM}${sessionId}${RESET}\n`)
+
+  // 5. Build verification URL and display QR code
+  const miniAppPath = encodeURIComponent(`/mini/register-cli?session=${sessionId}`)
+  const verifyUrl = `https://world.org/mini-app?app_id=app_1325590145579e6d6df0809d48040738&path=${miniAppPath}`
+
+  console.log(`  ${BOLD}Scan this QR code with World App to verify:${RESET}\n`)
+
+  // qrcode-terminal with callback to capture output
+  await new Promise<void>((resolve) => {
+    qrcode.generate(verifyUrl, { small: true }, (qr: string) => {
+      console.log(qr)
+      resolve()
+    })
+  })
+
+  console.log(`\n  ${DIM}Or open this URL:${RESET}`)
+  console.log(`  ${verifyUrl}\n`)
+
+  // 6. Poll for completion (every 3s, up to 15 minutes = 300 iterations)
+  const MAX_POLLS = 300
+  const POLL_INTERVAL_MS = 3_000
+
+  let sessionData: { status: string; proofData?: { merkle_root: string; nullifier_hash: string; proof: string } } | null = null
+
+  for (let poll = 1; poll <= MAX_POLLS; poll++) {
+    process.stdout.write(`\r  ⏳ Waiting for World ID verification... (poll ${poll}/${MAX_POLLS})`)
+
+    try {
+      const res = await fetch(`${API_BASE}/register/session/${sessionId}`)
+      if (!res.ok) {
+        // Non-fatal — keep polling
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
+        continue
+      }
+      sessionData = (await res.json()) as { status: string; proofData?: string }
+
+      if (sessionData.status === 'completed') {
+        process.stdout.write('\r' + ' '.repeat(80) + '\r') // clear the polling line
+        console.log(`  ${GREEN}✓${RESET} World ID verification received!\n`)
+        break
+      }
+    } catch {
+      // Network hiccup — keep polling
+    }
+
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
+  }
+
+  if (!sessionData || sessionData.status !== 'completed') {
+    console.log('\n')
+    die('Session expired. Run `register` again.')
+  }
+
+  if (!sessionData.proofData) {
+    die('Session completed but no proof data received.')
+  }
+
+  // 7. Parse proof and submit on-chain registration
+  console.log(`  ${BOLD}Submitting on-chain registration...${RESET}`)
+
+  const proofData = sessionData.proofData!
+
+  // Decode the ABI-encoded uint256[8] proof
+  const [decodedProof] = decodeAbiParameters(
+    [{ type: 'uint256[8]' }],
+    proofData.proof as `0x${string}`,
+  )
+
+  const proof: WorldIdProof = {
+    root: BigInt(proofData.merkle_root),
+    nonce: nonce,
+    nullifierHash: BigInt(proofData.nullifier_hash),
+    proof: decodedProof,
+  }
+
+  const key = await loadPrivateKey()
+  const account = privateKeyToAccount(key)
+
+  const txHash = await registerAgent(agentBookAddr, deployer, proof, account)
+  console.log(`  Tx submitted: ${DIM}${txLink(txHash)}${RESET}`)
+
+  // 8. Wait for receipt
+  console.log(`  Waiting for confirmation...`)
+  const receipt = await client.waitForTransactionReceipt({ hash: txHash })
+
+  if (receipt.status === 'success') {
+    // Read the new humanId
+    const newHumanId = await client.readContract({
+      address: agentBookAddr, abi: AGENTBOOK_ABI, functionName: 'lookupHuman',
+      args: [deployer],
+    }) as bigint
+    console.log(`\n  ${GREEN}✓${RESET} ${BOLD}Registration complete!${RESET} humanId: ${newHumanId}`)
+    console.log(`  ${DIM}${txLink(txHash)}${RESET}\n`)
   } else {
-    console.log(`\n\x1b[31m✗\x1b[0m Not registered in AgentBook.\n`)
-    console.log(`  Production: Scan World ID QR code to register.`)
-    console.log(`  Test (--test): MockAgentBook auto-registers deployer.\n`)
+    die(`On-chain transaction failed. Check: ${txLink(txHash)}`)
   }
 }
 
@@ -465,7 +608,7 @@ ${BOLD}Read commands:${RESET}
   items               List all items
   item <id>           Detail view for one item
   leaderboard         $NEWS earnings ranking
-  register            Check AgentBook registration
+  register            Register via World ID (QR code flow)
   dashboard           Live TUI dashboard (auto-refreshing)
 
 ${BOLD}Write commands:${RESET} (costs gas)
@@ -520,7 +663,7 @@ ${BOLD}Flags:${RESET}
         break
 
       case 'register':
-        await cmdRegister(client, agentBookAddr, deployer)
+        await cmdRegister(client, agentBookAddr, deployer, writeRpcUrl, isTest)
         break
 
       case 'submit': {

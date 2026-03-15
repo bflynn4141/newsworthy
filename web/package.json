@@ -9,7 +9,6 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@worldcoin/idkit": "4.0.8",
     "@worldcoin/minikit-js": "^1.11.0",
     "@worldcoin/minikit-react": "^1.9.14",
     "next": "16.1.6",

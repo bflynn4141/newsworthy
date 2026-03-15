@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { feed } from './routes/feed'
 import { stats } from './routes/stats'
+import { register } from './routes/register'
 import { createPaymentMiddleware } from './middleware/x402-agentkit'
 import { syncEvents } from './indexer/sync'
 import { parseUrl, summarizeWithAI } from './parser/parse'
@@ -17,6 +18,7 @@ app.get('/health', (c) => c.json({ ok: true, service: 'newsworthy-api' }))
 
 // Public endpoints — no payment needed
 app.route('/stats', stats)
+app.route('/register', register)
 
 // Public feed for web app (no x402 gate)
 app.get('/public/feed', async (c) => {
