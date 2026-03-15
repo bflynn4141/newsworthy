@@ -22,36 +22,6 @@ export function extractTweetId(url: string): string | null {
   return match ? match[1] : null;
 }
 
-export function categoryColor(cat: string): string {
-  switch ((cat ?? "").toLowerCase()) {
-    case "ai":
-      return "#8B5CF6";
-    case "defi":
-      return "#10B981";
-    case "infrastructure":
-      return "#F59E0B";
-    case "nft":
-      return "#EC4899";
-    default:
-      return "#6B7280";
-  }
-}
-
-export function categoryLabel(cat: string): string {
-  switch ((cat ?? "").toLowerCase()) {
-    case "ai":
-      return "AI";
-    case "defi":
-      return "DeFi";
-    case "infrastructure":
-      return "Infra";
-    case "nft":
-      return "NFT";
-    default:
-      return cat;
-  }
-}
-
 export function extractHandle(url: string): string | null {
   const match = url.match(/(?:twitter\.com|x\.com)\/(@?\w+)/);
   if (!match) return null;

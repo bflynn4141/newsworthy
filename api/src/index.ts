@@ -19,33 +19,17 @@ app.get('/health', (c) => c.json({ ok: true, service: 'newsworthy-api' }))
 app.route('/stats', stats)
 
 // Public feed for web app (no x402 gate)
-// ?category=ai|crypto filters by category, omit for all
 app.get('/public/feed', async (c) => {
   const limit = Math.min(Number(c.req.query('limit') ?? 50), 100)
   const offset = Number(c.req.query('offset') ?? 0)
-  const category = c.req.query('category')
 
-  const whereClause = category
-    ? `WHERE status = 'accepted' AND category = ?`
-    : `WHERE status = 'accepted'`
+  const { results } = await c.env.DB.prepare(
+    `SELECT * FROM articles WHERE status = 'accepted' ORDER BY submitted_at DESC LIMIT ? OFFSET ?`
+  ).bind(limit, offset).all()
 
-  const binds = category ? [limit, offset] : [limit, offset]
-
-  const { results } = category
-    ? await c.env.DB.prepare(
-        `SELECT * FROM articles ${whereClause} ORDER BY submitted_at DESC LIMIT ? OFFSET ?`
-      ).bind(category, limit, offset).all()
-    : await c.env.DB.prepare(
-        `SELECT * FROM articles WHERE status = 'accepted' ORDER BY submitted_at DESC LIMIT ? OFFSET ?`
-      ).bind(limit, offset).all()
-
-  const countRow = category
-    ? await c.env.DB.prepare(
-        `SELECT COUNT(*) as total FROM articles WHERE status = 'accepted' AND category = ?`
-      ).bind(category).first<{ total: number }>()
-    : await c.env.DB.prepare(
-        `SELECT COUNT(*) as total FROM articles WHERE status = 'accepted'`
-      ).first<{ total: number }>()
+  const countRow = await c.env.DB.prepare(
+    `SELECT COUNT(*) as total FROM articles WHERE status = 'accepted'`
+  ).first<{ total: number }>()
 
   return c.json({
     items: results ?? [],

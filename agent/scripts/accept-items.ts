@@ -71,7 +71,7 @@ async function main() {
               args: [BigInt(i)]
             })
             await publicClient.waitForTransactionReceipt({ hash: tx })
-            console.log(`✓ Resolved item ${i}: ${url} [${metadataHash || 'no category'}]`)
+            console.log(`✓ Resolved item ${i}: ${url}`)
             resolved++
           } catch (err: any) {
             console.log(`✗ Failed to resolve item ${i}: ${err.shortMessage || err.message}`)

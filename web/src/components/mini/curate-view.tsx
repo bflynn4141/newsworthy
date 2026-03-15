@@ -13,7 +13,6 @@ interface PendingItem {
   description: string;
   submitter: string;
   totalVotes: number;
-  category: string;
   bond: string;
   submittedAt: number;
   votingEndsAt: number;

@@ -104,8 +104,6 @@ export default function DetailPanel({ item, cols, config }: Props) {
             <Text>
               Score: <Text bold color={scoreColor(analysis.score)}>{analysis.score.toFixed(1)}</Text> / 10
               {'  |  '}
-              Category: <Text bold>{analysis.category}</Text>
-              {'  |  '}
               Source: <Text bold>{analysis.reliability}</Text> reliability
             </Text>
           </Box>

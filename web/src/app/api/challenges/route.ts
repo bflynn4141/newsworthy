@@ -15,7 +15,6 @@ interface VotingItem {
   description: string;
   submitter: string;
   totalVotes: number;
-  category: string;
   bond: string;
   submittedAt: number;
   votingEndsAt: number;
@@ -126,7 +125,6 @@ export async function GET() {
         description: url, // URL as description — frontend can enhance later
         submitter,
         totalVotes,
-        category: "news", // Contract doesn't store category; default for now
         bond: formatUnits(bond, 6), // USDC = 6 decimals
         submittedAt: submittedAtSec,
         votingEndsAt: submittedAtSec + votingPeriodSec,

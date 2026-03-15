@@ -19,7 +19,6 @@ export type ArticleAnalysis = {
   // Composite
   score: number            // 1-10 weighted composite
   summary: string          // One sentence (max 80 chars)
-  category: string         // politics | finance | tech | science | culture | sports | other
   // Sub-scores
   articleScore: number     // 1-10 content quality
   sourceScore: number      // 1-10 source/domain reputation
@@ -334,7 +333,6 @@ type AnalysisResult = {
   articleScore: number
   sourceScore: number
   summary: string
-  category: string
   reliability: string
   reasoning: string
 }
@@ -358,7 +356,7 @@ export async function analyzeItem(
 
   // Set pending status
   const pending: ArticleAnalysis = {
-    score: 0, summary: 'Analyzing...', category: '', articleScore: 0,
+    score: 0, summary: 'Analyzing...', articleScore: 0,
     sourceScore: 0, submitterScore: 0, uniquenessScore: 0,
     reliability: 'unknown', status: 'pending',
   }
@@ -370,7 +368,7 @@ export async function analyzeItem(
   // Check LLM
   if (!await detectLlm()) {
     const result: ArticleAnalysis = {
-      score: submitterScore, summary: '', category: '',
+      score: submitterScore, summary: '',
       articleScore: 0, sourceScore: 0, submitterScore, uniquenessScore: 0,
       reliability: 'unknown', status: 'error', error: 'No LLM',
     }
@@ -382,7 +380,7 @@ export async function analyzeItem(
   const articleText = await fetchArticleText(item.url)
   if (!articleText) {
     const result: ArticleAnalysis = {
-      score: submitterScore, summary: '', category: '',
+      score: submitterScore, summary: '',
       articleScore: 0, sourceScore: 0, submitterScore, uniquenessScore: 0,
       reliability: 'unknown', status: 'error', error: 'Fetch failed',
       flagged: true, flagReason: 'Unreachable URL',
@@ -396,11 +394,10 @@ export async function analyzeItem(
 1. An article quality score from 1-10 (writing, sourcing, newsworthiness)
 2. A source reputation score from 1-10 (is this domain a known, reliable outlet?)
 3. A one-sentence summary (max 80 chars)
-4. A category (one of: politics, finance, tech, science, culture, sports, other)
-5. Source reliability assessment (high, medium, low, or unknown)
-6. Brief reasoning (2-3 sentences)
+4. Source reliability assessment (high, medium, low, or unknown)
+5. Brief reasoning (2-3 sentences)
 
-Respond in JSON: {"articleScore":N,"sourceScore":N,"summary":"...","category":"...","reliability":"...","reasoning":"..."}
+Respond in JSON: {"articleScore":N,"sourceScore":N,"summary":"...","reliability":"...","reasoning":"..."}
 
 Article URL: ${item.url}
 Article text:
@@ -411,7 +408,7 @@ ${articleText}`
 
   if (!analysis || typeof analysis.articleScore !== 'number') {
     const result: ArticleAnalysis = {
-      score: submitterScore, summary: '', category: '',
+      score: submitterScore, summary: '',
       articleScore: 0, sourceScore: 0, submitterScore, uniquenessScore: 0,
       reliability: 'unknown', status: 'error', error: 'Analysis failed',
     }
@@ -471,7 +468,6 @@ Respond in JSON: {"uniquenessScore":N}`
   const result: ArticleAnalysis = {
     score: finalScore,
     summary: (analysis.summary ?? '').slice(0, 80),
-    category: analysis.category ?? 'other',
     articleScore: Math.round(analysis.articleScore * 10) / 10,
     sourceScore: Math.round(analysis.sourceScore * 10) / 10,
     submitterScore,

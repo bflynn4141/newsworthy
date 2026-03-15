@@ -21,7 +21,10 @@ export const worldchain = defineChain({
 });
 
 export const REGISTRY_ADDRESS = "0xb2d538D2BD69a657A5240c446F0565a7F5d52BBF" as const;
-export const AGENTBOOK_ADDRESS = "0xd4c3680c8cd5Ef45F5AbA9402e32D0561A1401cc" as const;
+// MockAgentBook — matches what the V2 contract is currently pointing at.
+// Switch to real AgentBook (0xd4c3680c8cd5Ef45F5AbA9402e32D0561A1401cc) when
+// World Foundation ships official AgentBook on World Chain.
+export const AGENTBOOK_ADDRESS = "0x1622a3c08bD330B5802B21013871Df17ddAD3b04" as const;
 export const USDC_ADDRESS = "0x79A02482A880bCE3F13e09Da970dC34db4CD24d1" as const;
 
 // Block when FeedRegistryV2 was deployed — avoids scanning from genesis

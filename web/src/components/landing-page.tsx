@@ -83,7 +83,6 @@ X-Payment: 0x1a2b3c...signed_payment
     {
       "title": "OpenAI Developers (@OpenAIDevs)",
       "summary": "GPT-5.4 is here...",
-      "category": "ai",
       "status": "accepted",
       "votes": 5,
       "source": "x.com"
@@ -203,28 +202,10 @@ export function LandingPage() {
           </div>
 
           {/* App Header */}
-          <div style={{ borderBottom: "1px solid #F0EDE8" }}>
-            <div className="px-4 pt-2 pb-2">
-              <span className="text-lg font-bold" style={{ color: "#1A1A1A" }}>
-                Newsworthy
-              </span>
-            </div>
-            <div className="flex">
-              {["All", "AI", "Crypto"].map((tab) => (
-                <div
-                  key={tab}
-                  className="flex-1 text-center py-2 text-[13px]"
-                  style={{
-                    fontWeight: tab === "All" ? 600 : 400,
-                    color: tab === "All" ? "#1A1A1A" : "#A8A29E",
-                    borderBottom:
-                      tab === "All" ? "2px solid #3B82F6" : "none",
-                  }}
-                >
-                  {tab}
-                </div>
-              ))}
-            </div>
+          <div className="px-4 pt-2 pb-2" style={{ borderBottom: "1px solid #F0EDE8" }}>
+            <span className="text-lg font-bold" style={{ color: "#1A1A1A" }}>
+              Newsworthy
+            </span>
           </div>
 
           {/* Feed Items */}

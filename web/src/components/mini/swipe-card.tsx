@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useCallback } from "react";
-import { categoryColor, extractHandle, formatTimeRemaining, timeAgo } from "@/lib/utils";
+import { extractHandle, formatTimeRemaining, timeAgo } from "@/lib/utils";
 
 interface SwipeCardProps {
   item: {
@@ -11,7 +11,6 @@ interface SwipeCardProps {
     description: string;
     submitter: string;
     totalVotes: number;
-    category: string;
     bond?: string;
     votingEndsAt?: number;
     votesFor?: number;
@@ -170,11 +169,11 @@ export function SwipeCard({ item, estimatedReward, onVote, onDrag }: SwipeCardPr
             <div
               className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-[9px] font-bold"
               style={{
-                backgroundColor: categoryColor(item.category ?? "") + "18",
-                color: categoryColor(item.category ?? ""),
+                backgroundColor: "#F0EDE8",
+                color: "#6B7280",
               }}
             >
-              {item.category?.slice(0, 2).toUpperCase() || "??"}
+              {item.submitter.slice(2, 4).toUpperCase()}
             </div>
           )}
           <span className="text-[12px]" style={{ color: "#A8A29E" }}>

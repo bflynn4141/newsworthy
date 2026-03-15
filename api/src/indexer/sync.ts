@@ -49,24 +49,6 @@ export async function syncEvents(
   const contractAddress = registryAddress as `0x${string}`
   let eventsProcessed = 0
 
-  // ABI for reading item metadata (category)
-  const itemsAbi = [{
-    type: 'function' as const,
-    name: 'items',
-    inputs: [{ name: 'itemId', type: 'uint256' as const }],
-    outputs: [
-      { name: 'submitter', type: 'address' as const },
-      { name: 'submitterHumanId', type: 'uint256' as const },
-      { name: 'url', type: 'string' as const },
-      { name: 'metadataHash', type: 'string' as const },
-      { name: 'bond', type: 'uint256' as const },
-      { name: 'voteCostSnapshot', type: 'uint256' as const },
-      { name: 'submittedAt', type: 'uint256' as const },
-      { name: 'status', type: 'uint8' as const },
-    ],
-    stateMutability: 'view' as const,
-  }]
-
   // Fetch all event types in parallel
   const [submittedLogs, voteLogs, resolvedLogs] = await Promise.all([
     client.getLogs({
@@ -115,28 +97,11 @@ export async function syncEvents(
       }
     }
 
-    // Read metadataHash from contract (used as category)
-    let category = 'crypto' // default
-    try {
-      const itemData = await client.readContract({
-        address: contractAddress,
-        abi: itemsAbi,
-        functionName: 'items',
-        args: [itemId],
-      }) as [string, bigint, string, string, bigint, bigint, bigint, number]
-      const metadataHash = itemData[3]
-      if (metadataHash === 'ai' || metadataHash === 'crypto') {
-        category = metadataHash
-      }
-    } catch {
-      // Fall back to default category
-    }
-
     const now = Date.now()
     await db
       .prepare(
-        `INSERT OR IGNORE INTO articles (id, url, title, description, image_url, content_summary, submitter, submitted_at, status, category, indexed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
+        `INSERT OR IGNORE INTO articles (id, url, title, description, image_url, content_summary, submitter, submitted_at, status, indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
       )
       .bind(
         Number(itemId),
@@ -147,7 +112,6 @@ export async function syncEvents(
         parsed.content_summary,
         submitter.toLowerCase(),
         now,
-        category,
         now
       )
       .run()

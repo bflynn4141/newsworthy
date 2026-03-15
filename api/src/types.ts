@@ -23,7 +23,6 @@ export interface Article {
   challenge_votes_for: number
   challenge_votes_against: number
   resolved_at: number | null
-  category: string
   indexed_at: number
 }
 

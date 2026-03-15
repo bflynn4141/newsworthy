@@ -13,7 +13,6 @@ export interface Article {
   challenge_votes_for: number;
   challenge_votes_against: number;
   resolved_at: number | null;
-  category: string;
   indexed_at: number;
 }
 
@@ -36,10 +35,9 @@ export interface Stats {
   activeAgents: number;
 }
 
-export async function fetchFeed(limit = 50, offset = 0, category?: string): Promise<{ items: Article[]; total: number }> {
+export async function fetchFeed(limit = 50, offset = 0): Promise<{ items: Article[]; total: number }> {
   try {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-    if (category) params.set("category", category);
     const res = await fetch(`${API_BASE}/public/feed?${params}`, {
       next: { revalidate: 60 },
     });
