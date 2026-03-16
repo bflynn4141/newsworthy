@@ -6,9 +6,11 @@ import {FeedRegistryV2} from "../src/FeedRegistryV2.sol";
 import {NewsToken} from "../src/NewsToken.sol";
 import {MockAgentBook} from "./mock/MockAgentBook.sol";
 import {MockUSDC} from "./mock/MockUSDC.sol";
+import {MockWorldIdRouter} from "./mock/MockWorldIdRouter.sol";
 import {IAgentBook} from "../src/interfaces/IAgentBook.sol";
 import {IERC20} from "../src/interfaces/IERC20.sol";
 import {INewsToken} from "../src/interfaces/INewsToken.sol";
+import {IWorldIDGroups} from "../src/interfaces/IWorldIDGroups.sol";
 import {ERC1967Proxy} from "@openzeppelin-contracts-5.0.2/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract FeedRegistryV2Test is Test {
@@ -17,13 +19,18 @@ contract FeedRegistryV2Test is Test {
     MockAgentBook public agentBook;
     MockUSDC public usdc;
     NewsToken public news;
+    MockWorldIdRouter public mockWorldIdRouter;
 
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
     address carol = makeAddr("carol");
     address dave = makeAddr("dave");
     address eve = makeAddr("eve");
+    address frank = makeAddr("frank"); // not in AgentBook, uses voteWithProof
     address unregistered = makeAddr("unregistered");
+
+    uint256 constant WORLD_ID_GROUP = 1;
+    uint256 constant EXT_NULLIFIER = 12345;
 
     uint256 constant BOND = 1e6;            // 1 USDC
     uint256 constant VOTE_COST = 50_000;    // 0.05 USDC
@@ -36,6 +43,7 @@ contract FeedRegistryV2Test is Test {
         agentBook = new MockAgentBook();
         usdc = new MockUSDC();
         news = new NewsToken(address(this));
+        mockWorldIdRouter = new MockWorldIdRouter();
 
         implementation = new FeedRegistryV2();
 
@@ -51,6 +59,9 @@ contract FeedRegistryV2Test is Test {
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
         registry = FeedRegistryV2(address(proxy));
 
+        // Initialize V2.2 — World ID direct verification
+        registry.initializeV2_2(IWorldIDGroups(address(mockWorldIdRouter)), WORLD_ID_GROUP, EXT_NULLIFIER);
+
         news.setMinter(address(registry));
 
         agentBook.setHumanId(alice, 1);
@@ -59,7 +70,7 @@ contract FeedRegistryV2Test is Test {
         agentBook.setHumanId(dave, 4);
         agentBook.setHumanId(eve, 5);
 
-        address[5] memory users = [alice, bob, carol, dave, eve];
+        address[6] memory users = [alice, bob, carol, dave, eve, frank];
         for (uint256 i = 0; i < users.length; i++) {
             usdc.mint(users[i], 100e6);
             vm.prank(users[i]);
@@ -781,5 +792,130 @@ contract FeedRegistryV2Test is Test {
         vm.prank(aliceAlt);
         vm.expectRevert(FeedRegistryV2.SelfVote.selector);
         registry.vote(itemId, true);
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //               VOTE WITH PROOF (V2.2)
+    // ═══════════════════════════════════════════════════════
+
+    uint256[8] DUMMY_PROOF = [uint256(0), 0, 0, 0, 0, 0, 0, 0];
+
+    function _voteWithProof(address voter, uint256 itemId, bool support, uint256 nullifierHash) internal {
+        vm.prank(voter);
+        registry.voteWithProof(itemId, support, 0, nullifierHash, DUMMY_PROOF);
+    }
+
+    function test_initializeV2_2_setsState() public view {
+        assertEq(address(registry.worldIdRouter()), address(mockWorldIdRouter));
+        assertEq(registry.groupId(), WORLD_ID_GROUP);
+        assertEq(registry.externalNullifierHash(), EXT_NULLIFIER);
+    }
+
+    function test_initializeV2_2_cannotReinitialize() public {
+        vm.expectRevert();
+        registry.initializeV2_2(IWorldIDGroups(address(mockWorldIdRouter)), WORLD_ID_GROUP, EXT_NULLIFIER);
+    }
+
+    function test_voteWithProof_happyPath() public {
+        uint256 itemId = _submit(alice, "https://x.com/user/status/2000000000000000001");
+        uint256 frankBefore = usdc.balanceOf(frank);
+        uint256 nullifier = 999;
+
+        vm.prank(frank);
+        vm.expectEmit(true, true, false, true);
+        emit FeedRegistryV2.VoteCastWithProof(itemId, nullifier, true, frank);
+        registry.voteWithProof(itemId, true, 0, nullifier, DUMMY_PROOF);
+
+        (uint256 votesFor, uint256 votesAgainst,,) = registry.getVoteSession(itemId);
+        assertEq(votesFor, 1);
+        assertEq(votesAgainst, 0);
+        assertEq(usdc.balanceOf(frank), frankBefore - VOTE_COST);
+        assertEq(uint8(registry.voterSide(itemId, frank)), uint8(FeedRegistryV2.VoteSide.Keep));
+        assertTrue(registry.hasVotedByHuman(itemId, nullifier));
+    }
+
+    function test_voteWithProof_selfVoteBlocked() public {
+        // Alice's humanId is 1 (from AgentBook). Submit gives submitterHumanId = 1.
+        uint256 itemId = _submit(alice, "https://x.com/user/status/2000000000000000002");
+
+        // Frank tries to vote with nullifierHash = 1 (same as alice's humanId) → SelfVote
+        vm.prank(frank);
+        vm.expectRevert(FeedRegistryV2.SelfVote.selector);
+        registry.voteWithProof(itemId, true, 0, 1, DUMMY_PROOF);
+    }
+
+    function test_voteWithProof_doubleVoteBlocked() public {
+        uint256 itemId = _submit(alice, "https://x.com/user/status/2000000000000000003");
+        uint256 nullifier = 888;
+
+        _voteWithProof(frank, itemId, true, nullifier);
+
+        // Same nullifierHash from a different address → AlreadyVoted
+        address grace = makeAddr("grace");
+        usdc.mint(grace, 100e6);
+        vm.prank(grace);
+        usdc.approve(address(registry), type(uint256).max);
+
+        vm.prank(grace);
+        vm.expectRevert(FeedRegistryV2.AlreadyVoted.selector);
+        registry.voteWithProof(itemId, false, 0, nullifier, DUMMY_PROOF);
+    }
+
+    function test_voteWithProof_crossPathDoubleVoteBlocked() public {
+        uint256 itemId = _submit(alice, "https://x.com/user/status/2000000000000000004");
+
+        // Bob votes via AgentBook (humanId = 2)
+        _vote(bob, itemId, true);
+
+        // Frank tries to vote with nullifierHash = 2 (same as bob's humanId) → AlreadyVoted
+        vm.prank(frank);
+        vm.expectRevert(FeedRegistryV2.AlreadyVoted.selector);
+        registry.voteWithProof(itemId, false, 0, 2, DUMMY_PROOF);
+    }
+
+    function test_voteWithProof_invalidProofReverts() public {
+        uint256 itemId = _submit(alice, "https://x.com/user/status/2000000000000000005");
+
+        mockWorldIdRouter.setShouldRevert(true);
+
+        vm.prank(frank);
+        vm.expectRevert("invalid proof");
+        registry.voteWithProof(itemId, true, 0, 777, DUMMY_PROOF);
+
+        // Reset for other tests
+        mockWorldIdRouter.setShouldRevert(false);
+    }
+
+    function test_voteWithProof_mixedVoters_resolveAndClaim() public {
+        uint256 itemId = _submit(alice, "https://x.com/user/status/2000000000000000006");
+
+        // bob votes keep via AgentBook (humanId=2)
+        _vote(bob, itemId, true);
+        // carol votes keep via AgentBook (humanId=3)
+        _vote(carol, itemId, true);
+        // frank votes remove via proof (nullifier=100)
+        _voteWithProof(frank, itemId, false, 100);
+
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+        registry.resolve(itemId);
+
+        (,,,,,,, FeedRegistryV2.ItemStatus status) = registry.items(itemId);
+        assertEq(uint8(status), uint8(FeedRegistryV2.ItemStatus.Accepted));
+
+        // Submitter gets bond back
+        assertEq(registry.pendingWithdrawals(alice), BOND);
+
+        // Keep voters split frank's stake
+        (, , uint256 keepClaim, uint256 removeClaim) = registry.getVoteSession(itemId);
+        assertEq(keepClaim, VOTE_COST + (1 * VOTE_COST) / 2);
+        assertEq(removeClaim, 0);
+
+        _claim(bob, itemId);
+        _claim(carol, itemId);
+        _claim(frank, itemId);
+
+        assertEq(registry.pendingWithdrawals(bob), keepClaim);
+        assertEq(registry.pendingWithdrawals(carol), keepClaim);
+        assertEq(registry.pendingWithdrawals(frank), 0);
     }
 }

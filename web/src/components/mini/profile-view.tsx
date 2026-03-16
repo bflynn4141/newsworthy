@@ -94,6 +94,7 @@ export function ProfileView() {
     };
   });
 
+  const isRegistered = profile && profile.humanId !== "0";
   const hasVoted = history.length > 0;
   const shortAddress = walletAddress
     ? shortenAddress(walletAddress)
@@ -172,15 +173,27 @@ export function ProfileView() {
           Profile
         </h1>
         {walletAddress ? (
-          <div className="flex items-center gap-1.5">
-            <div
-              className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: "#22C55E" }}
-            />
-            <span className="text-[12px] font-medium" style={{ color: "#22C55E" }}>
-              Verified Human
-            </span>
-          </div>
+          isRegistered ? (
+            <div className="flex items-center gap-1.5">
+              <div
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: "#22C55E" }}
+              />
+              <span className="text-[12px] font-medium" style={{ color: "#22C55E" }}>
+                Verified Human
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <div
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: "#F59E0B" }}
+              />
+              <span className="text-[12px] font-medium" style={{ color: "#F59E0B" }}>
+                Not Registered
+              </span>
+            </div>
+          )
         ) : (
           <span className="text-[12px]" style={{ color: "#A8A29E" }}>
             Open in World App to connect
@@ -188,7 +201,7 @@ export function ProfileView() {
         )}
       </div>
 
-      {/* Profile card */}
+      {/* Profile card — show stats for all users */}
       <div className="px-4 mb-4">
         <div
           className="rounded-2xl p-5"

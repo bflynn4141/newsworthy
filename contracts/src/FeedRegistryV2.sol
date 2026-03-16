@@ -6,6 +6,8 @@ import {UUPSUpgradeable} from "@openzeppelin-contracts-5.0.2/proxy/utils/UUPSUpg
 import {IAgentBook} from "./interfaces/IAgentBook.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 import {INewsToken} from "./interfaces/INewsToken.sol";
+import {IWorldIDGroups} from "./interfaces/IWorldIDGroups.sol";
+import {ByteHasher} from "./utils/ByteHasher.sol";
 
 /// @title Feed Registry V2
 /// @notice Token-curated registry with paid voting (prediction market dynamic).
@@ -14,6 +16,8 @@ import {INewsToken} from "./interfaces/INewsToken.sol";
 ///         Voters claim payouts individually (O(1) per claim, no gas limit risk).
 /// @dev UUPS upgradeable. Deploy behind an ERC1967Proxy.
 contract FeedRegistryV2 is Initializable, UUPSUpgradeable {
+    using ByteHasher for bytes;
+
     ///////////////////////////////////////////////////////////////////////////
     ///                                ERRORS                               ///
     ///////////////////////////////////////////////////////////////////////////
@@ -34,6 +38,7 @@ contract FeedRegistryV2 is Initializable, UUPSUpgradeable {
     error DailyLimitReached();
     error NotOwner();
     error ZeroAddress();
+    error InvalidProof();
 
     ///////////////////////////////////////////////////////////////////////////
     ///                                EVENTS                               ///
@@ -45,6 +50,7 @@ contract FeedRegistryV2 is Initializable, UUPSUpgradeable {
     event VoterClaimed(uint256 indexed itemId, address indexed voter, uint256 amount);
     event Withdrawal(address indexed account, uint256 amount);
     event NewsRewarded(uint256 indexed itemId, address indexed submitter, uint256 amount);
+    event VoteCastWithProof(uint256 indexed itemId, uint256 indexed nullifierHash, bool support, address voter);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event AgentBookUpdated(address indexed previousAgentBook, address indexed newAgentBook);
     event ParameterUpdated(string name, uint256 value);
@@ -99,8 +105,20 @@ contract FeedRegistryV2 is Initializable, UUPSUpgradeable {
     mapping(uint256 => mapping(address => VoteSide)) public voterSide;
     mapping(uint256 => mapping(address => bool)) public hasClaimed;
 
+    /// @notice When true, submissions skip World ID verification (any address can submit).
+    bool public openSubmissions;
+
+    /// @notice World ID router for direct proof verification.
+    IWorldIDGroups public worldIdRouter;
+
+    /// @notice World ID group (1 = Orb on World Chain).
+    uint256 public groupId;
+
+    /// @notice External nullifier hash shared with AgentBook for cross-path sybil resistance.
+    uint256 public externalNullifierHash;
+
     /// @dev Reserved storage for future upgrades.
-    uint256[38] private __gap;
+    uint256[34] private __gap;
 
     ///////////////////////////////////////////////////////////////////////////
     ///                              MODIFIERS                              ///
@@ -143,6 +161,18 @@ contract FeedRegistryV2 is Initializable, UUPSUpgradeable {
         minVotes = _minVotes;
         newsPerItem = _newsPerItem;
         maxDailySubmissions = _maxDailySubmissions;
+    }
+
+    /// @notice Initialize V2.2 state: World ID direct verification.
+    function initializeV2_2(
+        IWorldIDGroups _worldIdRouter,
+        uint256 _groupId,
+        uint256 _externalNullifierHash
+    ) external reinitializer(2) {
+        if (address(_worldIdRouter) == address(0)) revert ZeroAddress();
+        worldIdRouter = _worldIdRouter;
+        groupId = _groupId;
+        externalNullifierHash = _externalNullifierHash;
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -196,6 +226,23 @@ contract FeedRegistryV2 is Initializable, UUPSUpgradeable {
         newsToken = _newsToken;
     }
 
+    function setOpenSubmissions(bool _open) external onlyOwner {
+        openSubmissions = _open;
+    }
+
+    function setWorldIdRouter(IWorldIDGroups _worldIdRouter) external onlyOwner {
+        if (address(_worldIdRouter) == address(0)) revert ZeroAddress();
+        worldIdRouter = _worldIdRouter;
+    }
+
+    function setGroupId(uint256 _groupId) external onlyOwner {
+        groupId = _groupId;
+    }
+
+    function setExternalNullifierHash(uint256 _externalNullifierHash) external onlyOwner {
+        externalNullifierHash = _externalNullifierHash;
+    }
+
     ///////////////////////////////////////////////////////////////////////////
     ///                               SUBMIT                                ///
     ///////////////////////////////////////////////////////////////////////////
@@ -203,8 +250,14 @@ contract FeedRegistryV2 is Initializable, UUPSUpgradeable {
     /// @notice Submit an item to the registry. URL must be a tweet.
     ///         Caller must have approved bondAmount of bondToken to this contract.
     function submitItem(string calldata url, string calldata metadataHash) external {
-        uint256 humanId = agentBook.lookupHuman(msg.sender);
-        if (humanId == 0) revert NotRegistered();
+        uint256 humanId;
+        if (openSubmissions) {
+            // Open mode: use address as pseudo-humanId (no World ID required)
+            humanId = uint256(uint160(msg.sender));
+        } else {
+            humanId = agentBook.lookupHuman(msg.sender);
+            if (humanId == 0) revert NotRegistered();
+        }
         if (!_isTweetUrl(url)) revert InvalidUrl();
 
         uint256 today = block.timestamp / 1 days;
@@ -238,36 +291,33 @@ contract FeedRegistryV2 is Initializable, UUPSUpgradeable {
     ///                               VOTING                                ///
     ///////////////////////////////////////////////////////////////////////////
 
-    /// @notice Vote on an item in its voting window. Costs voteCostSnapshot USDC.
+    /// @notice Vote on an item via AgentBook registration. Costs voteCostSnapshot USDC.
     /// @param itemId The ID of the item
     /// @param support True to keep the item, false to remove it
     function vote(uint256 itemId, bool support) external {
-        if (itemId >= nextItemId) revert ItemNotFound();
-
         uint256 humanId = agentBook.lookupHuman(msg.sender);
         if (humanId == 0) revert NotRegistered();
-
-        Item storage item = items[itemId];
-        if (item.status != ItemStatus.Voting) revert InvalidItemStatus();
-        if (block.timestamp > item.submittedAt + votingPeriod) revert VotingPeriodExpired();
-
-        if (humanId == item.submitterHumanId) revert SelfVote();
-
-        if (hasVotedByHuman[itemId][humanId]) revert AlreadyVoted();
-        hasVotedByHuman[itemId][humanId] = true;
-
-        if (!bondToken.transferFrom(msg.sender, address(this), item.voteCostSnapshot)) revert TransferFailed();
-
-        voterSide[itemId][msg.sender] = support ? VoteSide.Keep : VoteSide.Remove;
-
-        VoteSession storage session = _voteSessions[itemId];
-        if (support) {
-            session.votesFor++;
-        } else {
-            session.votesAgainst++;
-        }
-
+        _doVote(itemId, support, humanId, msg.sender);
         emit VoteCast(itemId, humanId, support);
+    }
+
+    /// @notice Vote on an item with an inline World ID proof (no AgentBook needed).
+    /// @param itemId The ID of the item
+    /// @param support True to keep the item, false to remove it
+    /// @param root Merkle root of the World ID identity tree
+    /// @param nullifierHash World ID nullifier hash (acts as humanId)
+    /// @param proof Groth16 proof (uint256[8])
+    function voteWithProof(
+        uint256 itemId,
+        bool support,
+        uint256 root,
+        uint256 nullifierHash,
+        uint256[8] calldata proof
+    ) external {
+        uint256 signalHash = abi.encodePacked(msg.sender).hashToField();
+        worldIdRouter.verifyProof(root, groupId, signalHash, nullifierHash, externalNullifierHash, proof);
+        _doVote(itemId, support, nullifierHash, msg.sender);
+        emit VoteCastWithProof(itemId, nullifierHash, support, msg.sender);
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -373,6 +423,24 @@ contract FeedRegistryV2 is Initializable, UUPSUpgradeable {
     ///////////////////////////////////////////////////////////////////////////
     ///                             INTERNAL                                ///
     ///////////////////////////////////////////////////////////////////////////
+
+    function _doVote(uint256 itemId, bool support, uint256 humanId, address voter) internal {
+        if (itemId >= nextItemId) revert ItemNotFound();
+        Item storage item = items[itemId];
+        if (item.status != ItemStatus.Voting) revert InvalidItemStatus();
+        if (block.timestamp > item.submittedAt + votingPeriod) revert VotingPeriodExpired();
+        if (humanId == item.submitterHumanId) revert SelfVote();
+        if (hasVotedByHuman[itemId][humanId]) revert AlreadyVoted();
+        hasVotedByHuman[itemId][humanId] = true;
+        if (!bondToken.transferFrom(voter, address(this), item.voteCostSnapshot)) revert TransferFailed();
+        voterSide[itemId][voter] = support ? VoteSide.Keep : VoteSide.Remove;
+        VoteSession storage session = _voteSessions[itemId];
+        if (support) {
+            session.votesFor++;
+        } else {
+            session.votesAgainst++;
+        }
+    }
 
     function _mintNewsReward(uint256 itemId, address submitter) internal {
         if (newsPerItem == 0) return;

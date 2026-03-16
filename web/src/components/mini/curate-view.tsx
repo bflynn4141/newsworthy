@@ -2,9 +2,21 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { MiniKit } from "@worldcoin/minikit-js";
+import { decodeAbiParameters } from "viem";
 import { BottomNav } from "./bottom-nav";
 import { SwipeCard } from "./swipe-card";
-import { REGISTRY_ADDRESS, USDC_ADDRESS, VOTE_COST, voteAbi, erc20ApproveAbi } from "@/lib/contracts";
+import {
+  REGISTRY_ADDRESS,
+  USDC_ADDRESS,
+  VOTE_COST,
+  voteWithProofAbi,
+  erc20ApproveAbi,
+} from "@/lib/contracts";
+import {
+  obtainWorldIdProof,
+  isProofFresh,
+  type WorldIdProof,
+} from "@/lib/world-id-proof";
 
 interface PendingItem {
   id: number;
@@ -33,6 +45,31 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isAnimating = useRef(false);
   const [dragOffset, setDragOffset] = useState(0);
+  const [worldIdProof, setWorldIdProof] = useState<WorldIdProof | null>(null);
+  const [verifying, setVerifying] = useState(false);
+
+  // Obtain World ID proof on mount (with delay for MiniKit init)
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const wallet = MiniKit.isInstalled()
+        ? MiniKit.user?.walletAddress
+        : null;
+      if (!wallet || cancelled) return;
+      setVerifying(true);
+      try {
+        const proof = await obtainWorldIdProof(wallet as `0x${string}`);
+        if (!cancelled) setWorldIdProof(proof);
+      } catch (err) {
+        console.error("World ID verify failed:", err);
+      }
+      if (!cancelled) setVerifying(false);
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, []);
 
   // Clamp currentIndex when items shrink (e.g. poll returns fewer items)
   useEffect(() => {
@@ -78,8 +115,28 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
   const remaining = items.length - currentIndex;
 
   const handleVote = useCallback(
-    (direction: "keep" | "remove") => {
+    async (direction: "keep" | "remove") => {
       if (!currentItem || isAnimating.current) return;
+
+      // Get or refresh World ID proof
+      let proof = worldIdProof;
+      if (!isProofFresh(proof)) {
+        const wallet = MiniKit.isInstalled()
+          ? MiniKit.user?.walletAddress
+          : null;
+        if (!wallet) return;
+        setVerifying(true);
+        try {
+          proof = await obtainWorldIdProof(wallet as `0x${string}`);
+          setWorldIdProof(proof);
+        } catch (err) {
+          console.error("World ID verify failed:", err);
+          setVerifying(false);
+          return;
+        }
+        setVerifying(false);
+      }
+
       isAnimating.current = true;
 
       // Optimistic UI — record vote and start card exit
@@ -94,7 +151,13 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
       }, 400);
 
       // Fire MiniKit transaction (non-blocking)
-      if (MiniKit.isInstalled()) {
+      if (MiniKit.isInstalled() && proof) {
+        // Decode the ABI-encoded uint256[8] proof
+        const decodedProof = decodeAbiParameters(
+          [{ type: "uint256[8]" }],
+          proof.proof as `0x${string}`
+        )[0];
+
         MiniKit.commandsAsync
           .sendTransaction({
             transaction: [
@@ -106,9 +169,15 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
               },
               {
                 address: REGISTRY_ADDRESS,
-                abi: voteAbi,
-                functionName: "vote",
-                args: [votedItemId, direction === "keep"],
+                abi: voteWithProofAbi,
+                functionName: "voteWithProof",
+                args: [
+                  votedItemId,
+                  direction === "keep",
+                  proof.merkle_root,
+                  proof.nullifier_hash,
+                  decodedProof,
+                ],
               },
             ],
           })
@@ -125,7 +194,7 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
       }
       // Browser fallback: no tx, just advance card (enables dev mode)
     },
-    [currentItem]
+    [currentItem, worldIdProof]
   );
 
   // Loading state
@@ -341,6 +410,22 @@ export function CurateView({ pendingCount }: { pendingCount: number }) {
           className="fixed inset-0 z-0 pointer-events-none transition-none"
           style={{ backgroundColor: tintColor }}
         />
+      )}
+
+      {/* Verifying World ID banner */}
+      {verifying && (
+        <div
+          className="fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-2 py-2"
+          style={{ backgroundColor: "#EFF6FF" }}
+        >
+          <div
+            className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin"
+            style={{ borderColor: "#3B82F6", borderTopColor: "transparent" }}
+          />
+          <span className="text-[12px] font-medium" style={{ color: "#3B82F6" }}>
+            Verifying World ID...
+          </span>
+        </div>
       )}
 
       {/* Header */}
