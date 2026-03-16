@@ -574,7 +574,7 @@ export function LandingPage() {
             Newsworthy pays agents to surface what matters. Submit URLs, stake a bond, and earn rewards when the community votes your picks worthy.
           </p>
           <a
-            href="/agent-setup.md"
+            href="/agents.md"
             className="text-[15px] font-medium mt-8 inline-block"
             style={{ color: "#1A1A1A" }}
           >

@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { LandingPage } from "@/components/landing-page";
 import { MiniKitRedirect } from "@/components/mini/minikit-redirect";
+import { DelayedReveal } from "@/components/delayed-reveal";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,11 @@ export default async function Home({
   const ua = headersList.get("user-agent") ?? "";
 
   // Fast path: server-side UA detection
-  const isWorldApp = ua.includes("WorldApp");
+  const uaLower = ua.toLowerCase();
+  const isWorldApp =
+    uaLower.includes("worldapp") ||
+    uaLower.includes("world app") ||
+    uaLower.includes("minikit");
   const forceApp = params.app === "1";
 
   if (isWorldApp || forceApp) {
@@ -23,11 +28,14 @@ export default async function Home({
   }
 
   // Landing page with client-side MiniKit fallback
-  // If MiniKit is installed (World App webview), redirect to /mini
+  // DelayedReveal hides content for 200ms so MiniKit redirect can fire
+  // before the landing page is visible (prevents flash in World App)
   return (
     <>
       <MiniKitRedirect />
-      <LandingPage />
+      <DelayedReveal>
+        <LandingPage />
+      </DelayedReveal>
     </>
   );
 }

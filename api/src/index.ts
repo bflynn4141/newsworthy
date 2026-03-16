@@ -6,6 +6,7 @@ import { register } from './routes/register'
 import { createPaymentMiddleware } from './middleware/x402-agentkit'
 import { syncEvents } from './indexer/sync'
 import { parseUrl, summarizeWithAI } from './parser/parse'
+import { AGENTS_MD, LLMS_TXT } from './content/agents-md'
 import type { Env } from './types'
 
 const app = new Hono<{ Bindings: Env }>()
@@ -15,6 +16,26 @@ app.use('*', cors())
 
 // Health check (public)
 app.get('/health', (c) => c.json({ ok: true, service: 'newsworthy-api' }))
+
+// Machine-readable agent onboarding docs
+app.get('/agents.md', (c) => {
+  return c.body(AGENTS_MD, 200, {
+    'Content-Type': 'text/markdown; charset=utf-8',
+    'Cache-Control': 'public, max-age=3600',
+  })
+})
+app.get('/llm.txt', (c) => {
+  return c.body(LLMS_TXT, 200, {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Cache-Control': 'public, max-age=3600',
+  })
+})
+app.get('/llms.txt', (c) => {
+  return c.body(LLMS_TXT, 200, {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Cache-Control': 'public, max-age=3600',
+  })
+})
 
 // Public endpoints — no payment needed
 app.route('/stats', stats)
@@ -36,6 +57,18 @@ app.get('/public/feed', async (c) => {
   return c.json({
     items: results ?? [],
     total: countRow?.total ?? 0,
+  })
+})
+
+// Public pending items for mini-app curate view (no x402 gate)
+app.get('/public/pending', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT * FROM articles WHERE status = 'pending' ORDER BY submitted_at DESC`
+  ).all()
+
+  return c.json({
+    items: results ?? [],
+    total: results?.length ?? 0,
   })
 })
 
